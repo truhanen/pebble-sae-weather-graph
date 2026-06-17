@@ -2,7 +2,7 @@
 #include <limits.h>
 
 #define MAX_TEMPS         240
-#define TITLE_HEIGHT      20
+#define TITLE_HEIGHT      16
 #define CLOUD_HEIGHT      12
 #define TLABEL_HEIGHT     14
 #define BOTTOM_PAD        -1
@@ -349,22 +349,24 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       if (p > precip_max_p) precip_max_p = p;
     }
   }
+  if (precip_max_p > 100) precip_max_p = 150;   /* fix scale at 15mm when >10mm */
+  /* When scale is 0-2mm, halve the bar area and use integer-only ticks */
+  if (precip_max_p <= 20) precip_max_bar_h /= 2;
 
   /* ---- precipitation mm axis ticks (lines only, labels drawn later on top) ---- */
   if (s_precip_count > 0) {
     int tick_step = 5;
-    if (precip_max_p > 100) tick_step = 30;      /* >10mm: 3mm steps */
-    else if (precip_max_p > 50) tick_step = 20;  /* >5mm:  2mm steps */
-    else if (precip_max_p > 20) tick_step = 10;  /* >2mm:  1mm steps */
+    if (precip_max_p <= 100) tick_step = 10;      /* ≤10mm: 1mm steps */
+    else tick_step = 30;                           /* >10mm: 3mm steps */
     graphics_context_set_stroke_color(ctx, GColorLightGray);
     graphics_context_set_stroke_width(ctx, 1);
-    graphics_draw_line(ctx, GPoint(w - 10, precip_top), GPoint(w, precip_top));
+    graphics_draw_line(ctx, GPoint(w - 13, precip_top), GPoint(w, precip_top));
     for (int p = tick_step; p <= precip_max_p; p += tick_step) {
       int by = precip_top + p * precip_max_bar_h / precip_max_p;
       if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
       graphics_context_set_stroke_color(ctx, GColorLightGray);
       graphics_context_set_stroke_width(ctx, 1);
-      graphics_draw_line(ctx, GPoint(w - 10, by), GPoint(w, by));
+      graphics_draw_line(ctx, GPoint(w - 13, by), GPoint(w, by));
     }
   }
 
@@ -471,11 +473,11 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
     for (int s = 5; s <= wind_max_spd; s += 5) {
       int sy = WY(s);
       if (sy < wind_top || sy > wind_bot) continue;
-      graphics_draw_line(ctx, GPoint(w - 10, sy), GPoint(w, sy));
+      graphics_draw_line(ctx, GPoint(w - 13, sy), GPoint(w, sy));
       if (wind_scale_top_y < 0 || sy < wind_scale_top_y) wind_scale_top_y = sy;
     }
     /* 0 m/s tick at wind_bot */
-    graphics_draw_line(ctx, GPoint(w - 10, wind_bot), GPoint(w, wind_bot));
+    graphics_draw_line(ctx, GPoint(w - 13, wind_bot), GPoint(w, wind_bot));
 
 #undef WY
   }
@@ -500,16 +502,16 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       char lbl[4]; snprintf(lbl, sizeof(lbl), "%d", s);
       graphics_context_set_text_color(ctx, GColorBlack);
       graphics_draw_text(ctx, lbl, f_medium,
-                         GRect(w - 32, sy - 16, 28, 18),
+                         GRect(w - 30, sy - 16, 28, 18),
                          GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
     }
     graphics_context_set_text_color(ctx, GColorBlack);
     graphics_draw_text(ctx, "0", f_medium,
-                       GRect(w - 32, wbot - 16, 28, 18),
+                       GRect(w - 30, wbot - 16, 28, 18),
                        GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
     if (wind_scale_top_y >= 0) {
       graphics_draw_text(ctx, "m/s", f_tiny,
-                         GRect(w - 29, wind_scale_top_y - 25, 28, 12),
+                         GRect(w - 27, wind_scale_top_y - 25, 28, 12),
                          GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
     }
   }
@@ -531,28 +533,31 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   /* ---- precipitation mm labels (drawn on top) ---- */
   int mm_bot_by = -1;  /* y of lowest mm tick — used by min/max label overlap check */
   if (s_precip_count > 0) {
-    int tick_step = 5;
-    if (precip_max_p > 100) tick_step = 30;
-    else if (precip_max_p > 50) tick_step = 20;
-    else if (precip_max_p > 20) tick_step = 10;
+    int tick_step = 10;
+    if (precip_max_p > 100) tick_step = 30;       /* >10mm: 3mm steps */
     int mm_top_by = -1;  /* y of topmost (smallest y) tick */
     for (int p = tick_step; p <= precip_max_p; p += tick_step) {
       int by = precip_top + p * precip_max_bar_h / precip_max_p;
       if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
       if (mm_bot_by < 0 || by > mm_bot_by) mm_bot_by = by;
       if (mm_top_by < 0 || by < mm_top_by) mm_top_by = by;
-      char lbl[6];
-      if (p % 10 == 0) snprintf(lbl, sizeof(lbl), "%d", p / 10);
-      else snprintf(lbl, sizeof(lbl), ".%d", p % 10);
-      graphics_context_set_text_color(ctx, GColorBlack);
-      graphics_draw_text(ctx, lbl, f_medium,
-                         GRect(w - 32, by - 16, 28, 18),
-                         GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
+      /* Label every mm when ≤5mm, every 2mm when 5-10mm, every 3mm when >10mm */
+      bool show_lbl = (precip_max_p <= 50) ? (p % 10 == 0)
+                    : (precip_max_p <= 100) ? (p % 20 == 0)
+                    : (p % 30 == 0);
+      if (show_lbl) {
+        char lbl[6];
+        snprintf(lbl, sizeof(lbl), "%d", p / 10);
+        graphics_context_set_text_color(ctx, GColorBlack);
+        graphics_draw_text(ctx, lbl, f_medium,
+                           GRect(w - 30, by - 16, 28, 18),
+                           GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
+      }
     }
     if (mm_bot_by >= 0) {
       graphics_context_set_text_color(ctx, GColorBlack);
       graphics_draw_text(ctx, "mm", f_tiny,
-                         GRect(w - 29, mm_bot_by, 28, 12),
+                         GRect(w - 27, mm_bot_by, 28, 12),
                          GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
     }
   }
@@ -697,20 +702,32 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   graphics_context_set_stroke_width(ctx, 1);
   graphics_draw_line(ctx, GPoint(0, TITLE_HEIGHT - 1), GPoint(w, TITLE_HEIGHT - 1));
 
-  /* Location */
-  graphics_context_set_text_color(ctx, GColorBlack);
-  graphics_draw_text(ctx, s_location[0] ? s_location : "FMI Forecast", f_small,
-                     GRect(4, 3, w - 60, 14),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-
-  /* Current temperature */
+  /* Current temperature (left) */
+  graphics_context_set_text_color(ctx,
+    PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorBlack));
   if (s_current_idx >= 0 && s_current_idx < s_temp_count) {
     char cur[8];
-    snprintf(cur, sizeof(cur), "%dC\xc2\xb0", (int)s_temps[s_current_idx]);
-    graphics_context_set_text_color(ctx,
-      PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorBlack));
-    graphics_draw_text(ctx, cur, f_bold,
-                       GRect(w - 46, 0, 44, TITLE_HEIGHT),
+    snprintf(cur, sizeof(cur), "%d\xc2\xb0", (int)s_temps[s_current_idx]);
+    graphics_draw_text(ctx, cur, f_small,
+                       GRect(3, -1, 36, 14),
+                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+  }
+
+  /* Location label (centre-left, after temp) */
+  graphics_context_set_text_color(ctx, GColorBlack);
+  graphics_draw_text(ctx, s_location[0] ? s_location : "FMI Forecast", f_small,
+                     GRect(0, -1, w, 14),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+
+  /* Current time hh:mm (right) */
+  {
+    time_t now_t = time(NULL);
+    struct tm *lt = localtime(&now_t);
+    char tstr[6];
+    strftime(tstr, sizeof(tstr), "%H:%M", lt);
+    graphics_context_set_text_color(ctx, GColorBlack);
+    graphics_draw_text(ctx, tstr, f_small,
+                       GRect(w - 40, -1, 38, 14),
                        GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
   }
 }
