@@ -2,8 +2,9 @@
 
 var MAX_TEMPS = 240;
 var DEBUG_FORCE_ECMWF = false;     /* set true to always use ECMWF endpoint */
-var DEBUG_COORDS = false;          /* set true to use test coordinates */
-var DEBUG_LAT = 48.0941, DEBUG_LON = 7.9604;  /* Some random smallish town in Germany */
+var DEBUG_COORDS = false;           /* set true to use test coordinates */
+// var DEBUG_LAT = 48.0941, DEBUG_LON = 7.9604;  /* Waldkirch, Germany */
+var DEBUG_LAT = 62.2426, DEBUG_LON = 25.7473;  /* Jyväskylä center */
 var FMI_WFS_BASE = 'https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0' +
   '&request=getFeature' +
   '&storedquery_id=fmi::forecast::edited::weather::scandinavia::point::timevaluepair' +
@@ -33,9 +34,9 @@ function fetchForecast() {
 
   if (DEBUG_COORDS) {
     if (DEBUG_FORCE_ECMWF) {
-      fetchECMWF(DEBUG_LAT, DEBUG_LON, 'Waldkirch');
+      fetchECMWF(DEBUG_LAT, DEBUG_LON, 'Jyvaskyla');
     } else {
-      fetchForLatLon(DEBUG_LAT, DEBUG_LON, 'Waldkirch');
+      fetchForLatLon(DEBUG_LAT, DEBUG_LON, 'Jyvaskyla');
     }
     return;
   }

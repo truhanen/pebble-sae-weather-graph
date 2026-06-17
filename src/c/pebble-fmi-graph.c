@@ -357,21 +357,27 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       if (p > precip_max_p) precip_max_p = p;
     }
   }
-  if (precip_max_p > 100) precip_max_p = 150;   /* fix scale at 15mm when >10mm */
-  /* When scale is 0-2mm, halve the bar area and use integer-only ticks */
-  if (precip_max_p <= 20) precip_max_bar_h /= 2;
+  /* Snap to fixed scale ceilings: 3mm / 10mm / 15mm */
+  if      (precip_max_p <= 40)  precip_max_p = 30;
+  else if (precip_max_p <= 100) precip_max_p = 100;
+  else                          precip_max_p = 150;
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "mm scale: max_p=%d (%dmm), bar_h=%d, scale_half=%d",
+          precip_max_p, precip_max_p / 10, precip_max_bar_h, scale_half);
 
   /* ---- precipitation mm axis ticks (lines only, labels drawn later on top) ---- */
   if (s_precip_count > 0) {
     int tick_step = 5;
     if (precip_max_p <= 100) tick_step = 10;      /* ≤10mm: 1mm steps */
     else tick_step = 30;                           /* >10mm: 3mm steps */
+    APP_LOG(APP_LOG_LEVEL_DEBUG, "mm ticks: tick_step=%d (%dmm), ticks from %dmm to %dmm",
+            tick_step, tick_step / 10, tick_step / 10, precip_max_p / 10);
     graphics_context_set_stroke_color(ctx, GColorLightGray);
     graphics_context_set_stroke_width(ctx, 1);
     graphics_draw_line(ctx, GPoint(w - 13, precip_top), GPoint(w, precip_top));
     for (int p = tick_step; p <= precip_max_p; p += tick_step) {
       int by = precip_top + p * precip_max_bar_h / precip_max_p;
       if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
+      APP_LOG(APP_LOG_LEVEL_DEBUG, "  tick p=%d (%dmm) -> y=%d", p, p / 10, by);
       graphics_context_set_stroke_color(ctx, GColorLightGray);
       graphics_context_set_stroke_width(ctx, 1);
       graphics_draw_line(ctx, GPoint(w - 13, by), GPoint(w, by));
@@ -549,13 +555,14 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
       if (mm_bot_by < 0 || by > mm_bot_by) mm_bot_by = by;
       if (mm_top_by < 0 || by < mm_top_by) mm_top_by = by;
-      /* Label every mm when ≤5mm, every 2mm when 5-10mm, every 3mm when >10mm */
-      bool show_lbl = (precip_max_p <= 50) ? (p % 10 == 0)
+      /* Label every mm when ≤3mm, every 2mm when ≤10mm, every 3mm when >10mm */
+      bool show_lbl = (precip_max_p <= 30)  ? (p % 10 == 0)
                     : (precip_max_p <= 100) ? (p % 20 == 0)
                     : (p % 30 == 0);
       if (show_lbl) {
         char lbl[6];
         snprintf(lbl, sizeof(lbl), "%d", p / 10);
+        APP_LOG(APP_LOG_LEVEL_DEBUG, "  label '%s' at y=%d", lbl, by);
         graphics_context_set_text_color(ctx, GColorBlack);
         graphics_draw_text(ctx, lbl, f_medium,
                            GRect(w - 30, by - 16, 28, 18),
@@ -714,8 +721,10 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx,
     PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorBlack));
   if (s_current_idx >= 0 && s_current_idx < s_temp_count) {
+    int closest = (s_current_min >= 30 && s_current_idx + 1 < s_temp_count)
+                  ? s_current_idx + 1 : s_current_idx;
     char cur[8];
-    snprintf(cur, sizeof(cur), "%d\xc2\xb0", (int)s_temps[s_current_idx]);
+    snprintf(cur, sizeof(cur), "%d\xc2\xb0", (int)s_temps[closest]);
     graphics_draw_text(ctx, cur, f_small,
                        GRect(3, -1, 36, 14),
                        GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
