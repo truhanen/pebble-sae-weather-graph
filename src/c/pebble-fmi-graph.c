@@ -239,6 +239,14 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
 #define X(i)  ((i) * w / n)
 #define Y(t)  (y_low - ((t) - g_low) * (y_low - y_high) / (g_high - g_low))
 #define YC(t) ({ int _y = Y(t); _y < gt ? gt : (_y > gb ? gb : _y); })
+#define DRAW_SHADOWED(text, font, rect, overflow, align) do { \
+  graphics_context_set_text_color(ctx, GColorWhite); \
+  graphics_draw_text(ctx, text, font, \
+    GRect((rect).origin.x+1, (rect).origin.y+1, (rect).size.w, (rect).size.h), \
+    overflow, align, NULL); \
+  graphics_context_set_text_color(ctx, GColorBlack); \
+  graphics_draw_text(ctx, text, font, rect, overflow, align, NULL); \
+} while(0)
 
   /* ---- cloud cover strip (between title bar and graph) ---- */
   if (s_cloud_count > 0) {
@@ -509,19 +517,15 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       int sy = wbot - s * wh / wind_max_spd;
       if (sy < wind_top_y || sy > wbot) continue;
       char lbl[4]; snprintf(lbl, sizeof(lbl), "%d", s);
-      graphics_context_set_text_color(ctx, GColorBlack);
-      graphics_draw_text(ctx, lbl, f_medium,
-                         GRect(w - 30, sy - 16, 28, 18),
-                         GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
+      DRAW_SHADOWED(lbl, f_medium, GRect(w - 30, sy - 16, 28, 18),
+                    GTextOverflowModeWordWrap, GTextAlignmentRight);
     }
     graphics_context_set_text_color(ctx, GColorBlack);
-    graphics_draw_text(ctx, "0", f_medium,
-                       GRect(w - 30, wbot - 16, 28, 18),
-                       GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
+    DRAW_SHADOWED("0", f_medium, GRect(w - 30, wbot - 16, 28, 18),
+                  GTextOverflowModeWordWrap, GTextAlignmentRight);
     if (wind_scale_top_y >= 0) {
-      graphics_draw_text(ctx, "m/s", f_tiny,
-                         GRect(w - 27, wind_scale_top_y - 25, 28, 12),
-                         GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
+      DRAW_SHADOWED("m/s", f_tiny, GRect(w - 27, wind_scale_top_y - 25, 28, 12),
+                    GTextOverflowModeWordWrap, GTextAlignmentRight);
     }
   }
 
@@ -531,10 +535,8 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       int y = Y(t);
       if (y <= gt || y >= gb) continue;
       char lbl[10]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", t);
-      graphics_context_set_text_color(ctx, GColorBlack);
-      graphics_draw_text(ctx, lbl, f_medium,
-                         GRect(2, y - 16, 30, 18),
-                         GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+      DRAW_SHADOWED(lbl, f_medium, GRect(2, y - 16, 30, 18),
+                    GTextOverflowModeWordWrap, GTextAlignmentLeft);
     }
   }
 
@@ -557,17 +559,13 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         char lbl[6];
         snprintf(lbl, sizeof(lbl), "%d", p / 10);
         APP_LOG(APP_LOG_LEVEL_DEBUG, "  label '%s' at y=%d", lbl, by);
-        graphics_context_set_text_color(ctx, GColorBlack);
-        graphics_draw_text(ctx, lbl, f_medium,
-                           GRect(w - 30, by - 16, 28, 18),
-                           GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
+        DRAW_SHADOWED(lbl, f_medium, GRect(w - 30, by - 16, 28, 18),
+                      GTextOverflowModeWordWrap, GTextAlignmentRight);
       }
     }
     if (mm_bot_by >= 0) {
-      graphics_context_set_text_color(ctx, GColorBlack);
-      graphics_draw_text(ctx, "mm", f_tiny,
-                         GRect(w - 27, mm_bot_by, 28, 12),
-                         GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
+      DRAW_SHADOWED("mm", f_tiny, GRect(w - 27, mm_bot_by, 28, 12),
+                    GTextOverflowModeWordWrap, GTextAlignmentRight);
     }
   }
 
@@ -597,11 +595,17 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         while (dd > days_in_month[mm]) { dd -= days_in_month[mm]; mm++; if (mm > 12) mm = 1; }
         char day_lbl[16];
         snprintf(day_lbl, sizeof(day_lbl), "%s %d.%d.", day_names[weekday], dd, mm);
+        graphics_context_set_text_color(ctx, GColorWhite);
+        graphics_draw_text(ctx, day_lbl, f_small,
+                           GRect(tx + 4, gb - 3 - TLABEL_HEIGHT - 1, 70, TLABEL_HEIGHT),
+                           GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+        graphics_draw_text(ctx, day_lbl, f_small,
+                           GRect(tx + 4, gb - 3 - TLABEL_HEIGHT + 1, 70, TLABEL_HEIGHT),
+                           GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
         graphics_context_set_text_color(ctx, GColorBlack);
         graphics_draw_text(ctx, day_lbl, f_small,
                            GRect(tx + 4, gb - 3 - TLABEL_HEIGHT, 70, TLABEL_HEIGHT),
                            GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-        graphics_context_set_text_color(ctx, GColorBlack);
       }
     }
   } else {
@@ -621,7 +625,15 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       int mm = s_local_start_mon;
       while (dd > dim[mm]) { dd -= dim[mm]; mm++; if (mm > 12) mm = 1; }
       char date_lbl[8]; snprintf(date_lbl, sizeof(date_lbl), "%d.%d.", dd, mm);
-      /* Weekday on top row, date on bottom row */
+      /* Weekday on top row, date on bottom row — with white shadow */
+      graphics_context_set_text_color(ctx, GColorWhite);
+      graphics_draw_text(ctx, day_names[weekday], f_small,
+                         GRect(tx + 4, gb - 3 - TLABEL_HEIGHT - 1, 40, TLABEL_HEIGHT - 1),
+                         GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+      graphics_draw_text(ctx, day_names[weekday], f_small,
+                         GRect(tx + 4, gb - 3 - TLABEL_HEIGHT + 1, 40, TLABEL_HEIGHT - 1),
+                         GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+      graphics_context_set_text_color(ctx, GColorBlack);
       graphics_draw_text(ctx, day_names[weekday], f_small,
                          GRect(tx + 4, gb - 3 - TLABEL_HEIGHT, 40, TLABEL_HEIGHT - 1),
                          GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
@@ -668,8 +680,8 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
           }
           if (overlap) goto skip_max; }
         char lbl[8]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", s_day_max_val[d]);
-        graphics_draw_text(ctx, lbl, f_small, GRect(lx, lbl_y, lbl_w, 14),
-                           GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+        DRAW_SHADOWED(lbl, f_small, GRect(lx, lbl_y, lbl_w, 14),
+                      GTextOverflowModeWordWrap, GTextAlignmentCenter);
         if (drawn_n < MAX_DRAWN_LBLS) { drawn_lx[drawn_n] = lx; drawn_ly[drawn_n] = lbl_y; drawn_n++; }
       }
       skip_max:;
@@ -691,8 +703,8 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
           }
           if (overlap) goto skip_min; }
         char lbl[8]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", s_day_min_val[d]);
-        graphics_draw_text(ctx, lbl, f_small, GRect(lx, lbl_y, lbl_w, 14),
-                           GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+        DRAW_SHADOWED(lbl, f_small, GRect(lx, lbl_y, lbl_w, 14),
+                      GTextOverflowModeWordWrap, GTextAlignmentCenter);
         if (drawn_n < MAX_DRAWN_LBLS) { drawn_lx[drawn_n] = lx; drawn_ly[drawn_n] = lbl_y; drawn_n++; }
       }
       skip_min:;
@@ -703,6 +715,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
 #undef X
 #undef Y
 #undef YC
+#undef DRAW_SHADOWED
 
   /* ---- title bar (redrawn on top to cover any graph overflow) ---- */
   graphics_context_set_fill_color(ctx, GColorWhite);
