@@ -1,5 +1,5 @@
 {
-  "name": "pebble-fmi-graph",
+  "name": "pebble-saa-weather-graph",
   "author": "Tuukka Ruhanen",
   "version": "1.0.0",
   "keywords": [
@@ -11,7 +11,7 @@
   "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "FMI weather",
+    "displayName": "Sää Weather Graph",
     "uuid": "f315c701-6b02-4cd9-9317-f01924d73106",
     "sdkVersion": "3",
     "enableMultiJS": true,
