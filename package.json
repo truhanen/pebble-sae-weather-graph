@@ -44,7 +44,9 @@
       "LOCAL_START_DAY",
       "LOCAL_START_MONTH",
       "CURRENT_MINUTE",
-      "TEMP_UNIT"
+      "TEMP_UNIT",
+      "WIND_UNIT",
+      "PRECIP_UNIT"
     ],
     "resources": {
       "media": []

@@ -11,7 +11,9 @@
 /* ---------- settings (persisted) ---------- */
 
 typedef struct {
-  int temp_unit;  /* 0=Celsius, 1=Fahrenheit */
+  int temp_unit;    /* 0=Celsius, 1=Fahrenheit */
+  int wind_unit;    /* 0=m/s, 1=km/h, 2=mph */
+  int precip_unit;  /* 0=mm, 1=inch */
 } AppSettings;
 
 static AppSettings s_settings = { .temp_unit = 0 };
@@ -148,6 +150,20 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
     prv_save_settings();
     layer_mark_dirty(s_graph_layer);
   }
+  Tuple *wu_t = dict_find(iter, MESSAGE_KEY_WIND_UNIT);
+  if (wu_t) {
+    s_settings.wind_unit = (wu_t->type == TUPLE_CSTRING)
+      ? atoi(wu_t->value->cstring) : (int)wu_t->value->int32;
+    prv_save_settings();
+    layer_mark_dirty(s_graph_layer);
+  }
+  Tuple *pu_t = dict_find(iter, MESSAGE_KEY_PRECIP_UNIT);
+  if (pu_t) {
+    s_settings.precip_unit = (pu_t->type == TUPLE_CSTRING)
+      ? atoi(pu_t->value->cstring) : (int)pu_t->value->int32;
+    prv_save_settings();
+    layer_mark_dirty(s_graph_layer);
+  }
 
   Tuple *status_t = dict_find(iter, MESSAGE_KEY_STATUS);
   if (!status_t) return;
@@ -232,6 +248,12 @@ static void prv_inbox_dropped(AppMessageResult reason, void *ctx) {
 }
 
 /* ---------- graph layer ---------- */
+
+static int prv_wind_conv(int ms) {
+  if (s_settings.wind_unit == 1) return ms * 36 / 10;   /* km/h */
+  if (s_settings.wind_unit == 2) return ms * 2237 / 1000; /* mph */
+  return ms;  /* m/s */
+}
 
 static void prv_graph_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
@@ -393,25 +415,38 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       if (p > precip_max_p) precip_max_p = p;
     }
   }
-  /* Snap to fixed scale ceilings: 3mm / 10mm / 15mm */
-  if      (precip_max_p <= 40)  precip_max_p = 30;
-  else if (precip_max_p <= 100) precip_max_p = 100;
-  else                          precip_max_p = 150;
+  /* Snap to fixed scale ceilings */
+  int inch_tick_hund = 0;  /* tick step in hundredths-of-inch (0 = mm mode) */
+  if (s_settings.precip_unit == 1) {
+    /* Inch ceilings: 0.10in / 0.40in / 0.60in  (≈ mm 3/10/15) */
+    if      (precip_max_p <= 25)  { precip_max_p =  25; inch_tick_hund =  5; }
+    else if (precip_max_p <= 101) { precip_max_p = 101; inch_tick_hund = 10; }
+    else                          { precip_max_p = 152; inch_tick_hund = 20; }
+  } else {
+    if      (precip_max_p <= 40)  precip_max_p = 30;
+    else if (precip_max_p <= 100) precip_max_p = 100;
+    else                          precip_max_p = 150;
+  }
 
-  /* ---- precipitation mm axis ticks (lines only, labels drawn later on top) ---- */
+  /* ---- precipitation axis ticks (lines only, labels drawn later on top) ---- */
   if (s_precip_count > 0) {
-    int tick_step = 5;
-    if (precip_max_p <= 100) tick_step = 10;      /* ≤10mm: 1mm steps */
-    else tick_step = 30;                           /* >10mm: 3mm steps */
     graphics_context_set_stroke_color(ctx, GColorLightGray);
     graphics_context_set_stroke_width(ctx, 1);
     graphics_draw_line(ctx, GPoint(w - 13, precip_top), GPoint(w, precip_top));
-    for (int p = tick_step; p <= precip_max_p; p += tick_step) {
-      int by = precip_top + p * precip_max_bar_h / precip_max_p;
-      if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
-      graphics_context_set_stroke_color(ctx, GColorLightGray);
-      graphics_context_set_stroke_width(ctx, 1);
-      graphics_draw_line(ctx, GPoint(w - 13, by), GPoint(w, by));
+    if (inch_tick_hund > 0) {
+      for (int t = inch_tick_hund; t * 254 / 100 <= precip_max_p; t += inch_tick_hund) {
+        int p  = t * 254 / 100;
+        int by = precip_top + p * precip_max_bar_h / precip_max_p;
+        if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
+        graphics_draw_line(ctx, GPoint(w - 13, by), GPoint(w, by));
+      }
+    } else {
+      int tick_step = (precip_max_p <= 100) ? 10 : 30;
+      for (int p = tick_step; p <= precip_max_p; p += tick_step) {
+        int by = precip_top + p * precip_max_bar_h / precip_max_p;
+        if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
+        graphics_draw_line(ctx, GPoint(w - 13, by), GPoint(w, by));
+      }
     }
   }
 
@@ -444,22 +479,28 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- wind speed/gust bars + direction arrows ---- */
-  int wind_max_spd = 5;       /* hoisted: also needed for label drawing after temp curve */
-  int wind_scale_top_y = -1;  /* hoisted: needed for "m/s" label position */
+  int wind_max_spd_ms = 5;    /* raw m/s — hoisted for label section */
+  int wind_max_disp   = 5;    /* display-unit max — hoisted for label section */
+  int wind_step       = 5;    /* display-unit tick step — hoisted */
+  int wind_scale_top_y = -1;  /* hoisted: needed for unit label position */
   if (s_wind_count > 0 && s_wind_gust_count > 0) {
     for (int i = 0; i < s_wind_count; i++) {
-      if (s_wind_speed[i] != 255 && (int)s_wind_speed[i] > wind_max_spd)
-        wind_max_spd = s_wind_speed[i];
+      if (s_wind_speed[i] != 255 && (int)s_wind_speed[i] > wind_max_spd_ms)
+        wind_max_spd_ms = s_wind_speed[i];
     }
     for (int i = 0; i < s_wind_gust_count; i++) {
-      if (s_wind_gust[i] != 255 && (int)s_wind_gust[i] > wind_max_spd)
-        wind_max_spd = s_wind_gust[i];
+      if (s_wind_gust[i] != 255 && (int)s_wind_gust[i] > wind_max_spd_ms)
+        wind_max_spd_ms = s_wind_gust[i];
     }
-    wind_max_spd = ((wind_max_spd + 4) / 5) * 5;
+    wind_max_spd_ms = ((wind_max_spd_ms + 4) / 5) * 5;
+    wind_step = (s_settings.wind_unit == 1) ? 20 :
+                (s_settings.wind_unit == 2) ? 20 : 5;
+    wind_max_disp = prv_wind_conv(wind_max_spd_ms);
+    wind_max_disp = ((wind_max_disp + wind_step - 1) / wind_step) * wind_step;
     const int wind_top = wind_top_y;
     const int wind_bot = y_low;
     const int wind_h   = wind_bot - wind_top;
-#define WY(s) (wind_bot - (s) * wind_h / wind_max_spd)
+#define WY(v) (wind_bot - (v) * wind_h / wind_max_disp)
 
     /* Wind bars (light gray, speed→gust range) */
     graphics_context_set_fill_color(ctx, GColorLightGray);
@@ -470,8 +511,8 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       uint8_t gust = s_wind_gust[abs_i];
       if (spd == 255 || gust == 255) continue;
       if (gust < spd) gust = spd;  /* gust should be >= speed */
-      int y_spd  = WY(spd);
-      int y_gust = WY(gust);
+      int y_spd  = WY(prv_wind_conv(spd));
+      int y_gust = WY(prv_wind_conv(gust));
       if (y_gust < wind_top) y_gust = wind_top;
       if (y_spd  > wind_bot) y_spd  = wind_bot;
       int bar_h = y_spd - y_gust;
@@ -495,8 +536,8 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         uint8_t dir  = s_wind_dir[abs_i];
         if (spd == 255 || gust == 255 || dir == 255) continue;
         if (gust < spd) gust = spd;
-        int y_spd  = WY(spd);
-        int y_gust = WY(gust);
+        int y_spd  = WY(prv_wind_conv(spd));
+        int y_gust = WY(prv_wind_conv(gust));
         int cx = X(i) + (X(i + 1) - X(i)) / 2;
         int cy = (y_gust + y_spd) / 2;
         /* Decode direction: from_deg → to_deg (where wind goes) */
@@ -515,13 +556,13 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
     graphics_context_set_stroke_color(ctx, GColorLightGray);
     graphics_context_set_stroke_width(ctx, 1);
     wind_scale_top_y = -1;
-    for (int s = 5; s <= wind_max_spd; s += 5) {
+    for (int s = wind_step; s <= wind_max_disp; s += wind_step) {
       int sy = WY(s);
       if (sy < wind_top || sy > wind_bot) continue;
       graphics_draw_line(ctx, GPoint(w - 13, sy), GPoint(w, sy));
       if (wind_scale_top_y < 0 || sy < wind_scale_top_y) wind_scale_top_y = sy;
     }
-    /* 0 m/s tick at wind_bot */
+    /* 0 tick at wind_bot */
     graphics_draw_line(ctx, GPoint(w - 13, wind_bot), GPoint(w, wind_bot));
 
 #undef WY
@@ -541,10 +582,10 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   if (s_wind_count > 0 && s_wind_gust_count > 0) {
     const int wbot = y_low;
     const int wh   = wbot - wind_top_y;
-    for (int s = 5; s <= wind_max_spd; s += 5) {
-      int sy = wbot - s * wh / wind_max_spd;
+    for (int s = wind_step; s <= wind_max_disp; s += wind_step) {
+      int sy = wbot - s * wh / wind_max_disp;
       if (sy < wind_top_y || sy > wbot) continue;
-      char lbl[4]; snprintf(lbl, sizeof(lbl), "%d", s);
+      char lbl[5]; snprintf(lbl, sizeof(lbl), "%d", s);
       DRAW_SHADOWED(lbl, f_medium, GRect(w - 30, sy - 16, 28, 18),
                     GTextOverflowModeWordWrap, GTextAlignmentRight);
     }
@@ -552,7 +593,9 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
     DRAW_SHADOWED("0", f_medium, GRect(w - 30, wbot - 16, 28, 18),
                   GTextOverflowModeWordWrap, GTextAlignmentRight);
     if (wind_scale_top_y >= 0) {
-      DRAW_SHADOWED("m/s", f_tiny, GRect(w - 26, wind_scale_top_y - 25, 26, 12),
+      const char *wlbl = (s_settings.wind_unit == 1) ? "km/h" :
+                         (s_settings.wind_unit == 2) ? "mph" : "m/s";
+      DRAW_SHADOWED(wlbl, f_tiny, GRect(w - 26, wind_scale_top_y - 25, 26, 12),
                     GTextOverflowModeWordWrap, GTextAlignmentRight);
     }
   }
@@ -568,30 +611,42 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
     }
   }
 
-  /* ---- precipitation mm labels (drawn on top) ---- */
-  int mm_bot_by = -1;  /* y of lowest mm tick — used by min/max label overlap check */
+  /* ---- precipitation labels (drawn on top) ---- */
+  int mm_bot_by = -1;
   if (s_precip_count > 0) {
-    int tick_step = 10;
-    if (precip_max_p > 100) tick_step = 30;       /* >10mm: 3mm steps */
-    int mm_top_by = -1;  /* y of topmost (smallest y) tick */
-    for (int p = tick_step; p <= precip_max_p; p += tick_step) {
-      int by = precip_top + p * precip_max_bar_h / precip_max_p;
-      if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
-      if (mm_bot_by < 0 || by > mm_bot_by) mm_bot_by = by;
-      if (mm_top_by < 0 || by < mm_top_by) mm_top_by = by;
-      /* Label every mm when ≤3mm, every 2mm when ≤10mm, every 3mm when >10mm */
-      bool show_lbl = (precip_max_p <= 30)  ? (p % 10 == 0)
-                    : (precip_max_p <= 100) ? (p % 20 == 0)
-                    : (p % 30 == 0);
-      if (show_lbl) {
+    int mm_top_by = -1;
+    if (inch_tick_hund > 0) {
+      for (int t = inch_tick_hund; t * 254 / 100 <= precip_max_p; t += inch_tick_hund) {
+        int p  = t * 254 / 100;
+        int by = precip_top + p * precip_max_bar_h / precip_max_p;
+        if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
+        if (mm_bot_by < 0 || by > mm_bot_by) mm_bot_by = by;
+        if (mm_top_by < 0 || by < mm_top_by) mm_top_by = by;
         char lbl[6];
-        snprintf(lbl, sizeof(lbl), "%d", p / 10);
+        snprintf(lbl, sizeof(lbl), "%d.%02d", t / 100, t % 100);
         DRAW_SHADOWED(lbl, f_medium, GRect(w - 30, by - 16, 28, 18),
                       GTextOverflowModeWordWrap, GTextAlignmentRight);
       }
+    } else {
+      int tick_step = (precip_max_p > 100) ? 30 : 10;
+      for (int p = tick_step; p <= precip_max_p; p += tick_step) {
+        int by = precip_top + p * precip_max_bar_h / precip_max_p;
+        if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
+        if (mm_bot_by < 0 || by > mm_bot_by) mm_bot_by = by;
+        if (mm_top_by < 0 || by < mm_top_by) mm_top_by = by;
+        bool show_lbl = (precip_max_p <= 30)  ? (p % 10 == 0)
+                      : (precip_max_p <= 100) ? (p % 20 == 0)
+                      : (p % 30 == 0);
+        if (show_lbl) {
+          char lbl[6]; snprintf(lbl, sizeof(lbl), "%d", p / 10);
+          DRAW_SHADOWED(lbl, f_medium, GRect(w - 30, by - 16, 28, 18),
+                        GTextOverflowModeWordWrap, GTextAlignmentRight);
+        }
+      }
     }
     if (mm_bot_by >= 0) {
-      DRAW_SHADOWED("mm", f_tiny, GRect(w - 26, mm_bot_by, 26, 12),
+      const char *plbl = (s_settings.precip_unit == 1) ? "in" : "mm";
+      DRAW_SHADOWED(plbl, f_tiny, GRect(w - 26, mm_bot_by, 26, 12),
                     GTextOverflowModeWordWrap, GTextAlignmentRight);
     }
   }
