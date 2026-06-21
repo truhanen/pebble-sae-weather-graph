@@ -2,3 +2,4 @@ tmp
 build
 .idea
 .lock-waf_darwin_build
+node_modules

@@ -1,5 +1,9 @@
 /* global Pebble, XMLHttpRequest */
 
+var Clay = require('pebble-clay');
+var clayConfig = require('./config');
+var clay = new Clay(clayConfig);
+
 var MAX_TEMPS = 240;
 var DEBUG_FORCE_OPENMETEO = false;  /* set true to always use Open-Meteo endpoint */
 var DEBUG_COORDS = null;  /* set to an object to use test coordinates */
@@ -11,6 +15,15 @@ var FMI_WFS_BASE = 'https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0' +
   '&parameters=Temperature,Precipitation1h,WindSpeedMS,WindDirection,HourlyMaximumGust,TotalCloudCover&timestep=60';
 
 var pendingFetch = false;
+
+function getTempUnit() {
+  try {
+    var settings = JSON.parse(localStorage.getItem('clay-settings')) || {};
+    return parseInt(settings.TEMP_UNIT) || 0;  /* 0=Celsius, 1=Fahrenheit */
+  } catch(e) {
+    return 0;
+  }
+}
 
 Pebble.addEventListener('ready', function () {
   console.log('PebbleKit JS ready');

@@ -9,7 +9,9 @@
     "graph"
   ],
   "private": true,
-  "dependencies": {},
+  "dependencies": {
+    "pebble-clay": "*"
+  },
   "pebble": {
     "displayName": "Sää Weather Graph",
     "uuid": "f315c701-6b02-4cd9-9317-f01924d73106",
@@ -20,13 +22,12 @@
       "basalt",
       "chalk",
       "diorite",
-      "emery",
-      "flint",
-      "gabbro"
+      "emery"
     ],
     "watchapp": {
       "watchface": false
     },
+    "capabilities": ["configurable"],
     "messageKeys": [
       "REQUEST_DATA",
       "STATUS",
@@ -42,7 +43,8 @@
       "CLOUD_COVER",
       "LOCAL_START_DAY",
       "LOCAL_START_MONTH",
-      "CURRENT_MINUTE"
+      "CURRENT_MINUTE",
+      "TEMP_UNIT"
     ],
     "resources": {
       "media": []

@@ -6,6 +6,23 @@
 #define CLOUD_HEIGHT      12
 #define TLABEL_HEIGHT     14
 #define BOTTOM_PAD        -1
+#define SETTINGS_KEY      1
+
+/* ---------- settings (persisted) ---------- */
+
+typedef struct {
+  int temp_unit;  /* 0=Celsius, 1=Fahrenheit */
+} AppSettings;
+
+static AppSettings s_settings = { .temp_unit = 0 };
+
+static void prv_load_settings(void) {
+  persist_read_data(SETTINGS_KEY, &s_settings, sizeof(s_settings));
+}
+
+static void prv_save_settings(void) {
+  persist_write_data(SETTINGS_KEY, &s_settings, sizeof(s_settings));
+}
 
 /* ---------- state ---------- */
 
@@ -120,6 +137,18 @@ static void prv_update_status_layer(void) {
 /* ---------- AppMessage ---------- */
 
 static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
+  /* Handle Clay config settings (sent without STATUS) */
+  Tuple *unit_t = dict_find(iter, MESSAGE_KEY_TEMP_UNIT);
+  if (unit_t) {
+    if (unit_t->type == TUPLE_CSTRING) {
+      s_settings.temp_unit = atoi(unit_t->value->cstring);
+    } else {
+      s_settings.temp_unit = (int)unit_t->value->int32;
+    }
+    prv_save_settings();
+    layer_mark_dirty(s_graph_layer);
+  }
+
   Tuple *status_t = dict_find(iter, MESSAGE_KEY_STATUS);
   if (!status_t) return;
 
@@ -237,6 +266,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   if (n < 2) return;
 
 #define X(i)  ((i) * w / n)
+#define TC(c) (s_settings.temp_unit ? ((c) * 9 / 5 + 32) : (c))
 #define Y(t)  (y_low - ((t) - g_low) * (y_low - y_high) / (g_high - g_low))
 #define YC(t) ({ int _y = Y(t); _y < gt ? gt : (_y > gb ? gb : _y); })
 #define DRAW_SHADOWED(text, font, rect, overflow, align) do { \
@@ -275,25 +305,26 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- temperature scale: anchor grid lines to data ---- */
-  int min_t = (int)s_temps[0], max_t = (int)s_temps[0];
+  int min_t = TC((int)s_temps[0]), max_t = TC((int)s_temps[0]);
   for (int i = 1; i < s_temp_count; i++) {
-    int t = (int)s_temps[i];
+    int t = TC((int)s_temps[i]);
     if (t < min_t) min_t = t;
     if (t > max_t) max_t = t;
   }
-  /* g_low: nearest 5°C floor of min_t; g_high: nearest 5°C ceiling of max_t */
-  int g_low  = (min_t / 5) * 5 - (min_t < 0 && min_t % 5 ? 5 : 0);
-  if (g_low > min_t) g_low -= 5;
-  int g_high = (max_t / 5) * 5 + (max_t > 0 && max_t % 5 ? 5 : 0);
-  if (g_high < max_t) g_high += 5;
-  if (g_high == g_low) g_high = g_low + 5;  /* guard against flat data */
+  const int t_step = s_settings.temp_unit ? 10 : 5;
+  /* g_low: nearest step floor of min_t; g_high: nearest step ceiling of max_t */
+  int g_low  = (min_t / t_step) * t_step - (min_t < 0 && min_t % t_step ? t_step : 0);
+  if (g_low > min_t) g_low -= t_step;
+  int g_high = (max_t / t_step) * t_step + (max_t > 0 && max_t % t_step ? t_step : 0);
+  if (g_high < max_t) g_high += t_step;
+  if (g_high == g_low) g_high = g_low + t_step;  /* guard against flat data */
   /* Fix pixel positions: g_low just above weekday labels, g_high with room for top label */
   const int y_low  = gb - 3 - TLABEL_HEIGHT - 2;  /* 2px above top label row */
   const int y_high = gt + 18;                      /* room for f_medium label + gap */
 
-  /* ---- grid lines (every 5 °C) ---- */
+  /* ---- grid lines (every t_step degrees) ---- */
   {
-    for (int t = g_low; t <= g_high; t += 5) {
+    for (int t = g_low; t <= g_high; t += t_step) {
       int y = Y(t);
       if (y <= gt || y >= gb) continue;
       graphics_context_set_stroke_color(ctx, GColorLightGray);
@@ -502,8 +533,8 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   graphics_context_set_stroke_width(ctx, 2);
   for (int i = 0; i < n - 1; i++) {
     graphics_draw_line(ctx,
-      GPoint(X(i),     YC((int)s_temps[view_start + i])),
-      GPoint(X(i + 1), YC((int)s_temps[view_start + i + 1])));
+      GPoint(X(i),     YC(TC((int)s_temps[view_start + i]))),
+      GPoint(X(i + 1), YC(TC((int)s_temps[view_start + i + 1]))));
   }
 
   /* ---- wind scale labels (drawn after temp curve so they appear on top) ---- */
@@ -528,10 +559,10 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
 
   /* ---- temperature y-axis labels (drawn on top) ---- */
   {
-    for (int t = g_low; t <= g_high; t += 5) {
+    for (int t = g_low; t <= g_high; t += t_step) {
       int y = Y(t);
       if (y <= gt || y >= gb) continue;
-      char lbl[10]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", t);
+      char lbl[8]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", t);
       DRAW_SHADOWED(lbl, f_medium, GRect(2, y - 16, 30, 18),
                     GTextOverflowModeWordWrap, GTextAlignmentLeft);
     }
@@ -666,11 +697,11 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       {
         int abs_i = s_day_max_abs[d];
         if (abs_i < 0 || abs_i < view_start || abs_i >= view_start + n) goto skip_max;
-        int lbl_y = YC(s_day_max_val[d]) - 17;
+        int lbl_y = YC(TC(s_day_max_val[d])) - 17;
         int lx = X(abs_i - view_start) - lbl_w / 2;
         if (lx < day_x0) lx = day_x0;
         if (lx + lbl_w > day_x1) lx = day_x1 - lbl_w;
-        /* Skip if horizontally overlapping left (°C) or right (mm/m/s) scale areas */
+        /* Skip if horizontally overlapping left (°) or right (mm/m/s) scale areas */
         if (lx < 18 || lx + lbl_w > w - 18) goto skip_max;
         /* Skip if overlapping with any previously drawn label */
         { bool overlap = false;
@@ -679,7 +710,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
                 lbl_y < drawn_ly[i] + 30 && lbl_y + 30 > drawn_ly[i]) { overlap = true; break; }
           }
           if (overlap) goto skip_max; }
-        char lbl[8]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", s_day_max_val[d]);
+        char lbl[8]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", TC(s_day_max_val[d]));
         DRAW_SHADOWED(lbl, f_small, GRect(lx, lbl_y, lbl_w, 14),
                       GTextOverflowModeWordWrap, GTextAlignmentCenter);
         if (drawn_n < MAX_DRAWN_LBLS) { drawn_lx[drawn_n] = lx; drawn_ly[drawn_n] = lbl_y; drawn_n++; }
@@ -689,11 +720,11 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       {
         int abs_i = s_day_min_abs[d];
         if (abs_i < 0 || abs_i < view_start || abs_i >= view_start + n) goto skip_min;
-        int lbl_y = YC(s_day_min_val[d]) + 2;
+        int lbl_y = YC(TC(s_day_min_val[d])) + 2;
         int lx = X(abs_i - view_start) - lbl_w / 2;
         if (lx < day_x0) lx = day_x0;
         if (lx + lbl_w > day_x1) lx = day_x1 - lbl_w;
-        /* Skip if horizontally overlapping left (°C) or right (mm/m/s) scale areas */
+        /* Skip if horizontally overlapping left (°) or right (mm/m/s) scale areas */
         if (lx < 18 || lx + lbl_w > w - 18) goto skip_min;
         /* Skip if overlapping with any previously drawn label */
         { bool overlap = false;
@@ -702,7 +733,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
                 lbl_y < drawn_ly[i] + 30 && lbl_y + 30 > drawn_ly[i]) { overlap = true; break; }
           }
           if (overlap) goto skip_min; }
-        char lbl[8]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", s_day_min_val[d]);
+        char lbl[8]; snprintf(lbl, sizeof(lbl), "%d\xc2\xb0", TC(s_day_min_val[d]));
         DRAW_SHADOWED(lbl, f_small, GRect(lx, lbl_y, lbl_w, 14),
                       GTextOverflowModeWordWrap, GTextAlignmentCenter);
         if (drawn_n < MAX_DRAWN_LBLS) { drawn_lx[drawn_n] = lx; drawn_ly[drawn_n] = lbl_y; drawn_n++; }
@@ -713,6 +744,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
 #undef X
+#undef TC
 #undef Y
 #undef YC
 #undef DRAW_SHADOWED
@@ -731,7 +763,9 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
     int closest = (s_current_min >= 30 && s_current_idx + 1 < s_temp_count)
                   ? s_current_idx + 1 : s_current_idx;
     char cur[8];
-    snprintf(cur, sizeof(cur), "%d\xc2\xb0", (int)s_temps[closest]);
+    snprintf(cur, sizeof(cur), "%d\xc2\xb0%s",
+             s_settings.temp_unit ? ((int)s_temps[closest] * 9 / 5 + 32) : (int)s_temps[closest],
+             s_settings.temp_unit ? "F" : "C");
     graphics_draw_text(ctx, cur, f_small,
                        GRect(3, -1, 36, 14),
                        GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
@@ -928,6 +962,7 @@ static void prv_window_unload(Window *window) {
 /* ---------- init / deinit ---------- */
 
 static void prv_init(void) {
+  prv_load_settings();
   app_message_register_inbox_received(prv_inbox_received);
   app_message_register_inbox_dropped(prv_inbox_dropped);
   app_message_open(app_message_inbox_size_maximum(),
