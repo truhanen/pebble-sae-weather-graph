@@ -1,6 +1,9 @@
-.PHONY: start_emulator install_emulator
+.PHONY: build start_emulator install_emulator
 
 LOG_FILE := tmp/emulator.log
+
+build:
+	pebble build || pebble build
 
 start_emulator:
 	mkdir -p tmp
@@ -13,3 +16,6 @@ start_emulator:
 
 install_emulator:
 	pebble install --emulator=emery
+
+install_cloudpebble:
+	pebble install --cloudpebble
