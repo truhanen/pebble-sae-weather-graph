@@ -457,7 +457,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
     }
     wind_max_spd = ((wind_max_spd + 4) / 5) * 5;
     const int wind_top = wind_top_y;
-    const int wind_bot = gb - TLABEL_HEIGHT - 3;
+    const int wind_bot = y_low;
     const int wind_h   = wind_bot - wind_top;
 #define WY(s) (wind_bot - (s) * wind_h / wind_max_spd)
 
@@ -539,7 +539,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
 
   /* ---- wind scale labels (drawn after temp curve so they appear on top) ---- */
   if (s_wind_count > 0 && s_wind_gust_count > 0) {
-    const int wbot = gb - TLABEL_HEIGHT - 3;
+    const int wbot = y_low;
     const int wh   = wbot - wind_top_y;
     for (int s = 5; s <= wind_max_spd; s += 5) {
       int sy = wbot - s * wh / wind_max_spd;
@@ -552,7 +552,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
     DRAW_SHADOWED("0", f_medium, GRect(w - 30, wbot - 16, 28, 18),
                   GTextOverflowModeWordWrap, GTextAlignmentRight);
     if (wind_scale_top_y >= 0) {
-      DRAW_SHADOWED("m/s", f_tiny, GRect(w - 27, wind_scale_top_y - 25, 28, 12),
+      DRAW_SHADOWED("m/s", f_tiny, GRect(w - 26, wind_scale_top_y - 25, 26, 12),
                     GTextOverflowModeWordWrap, GTextAlignmentRight);
     }
   }
@@ -591,7 +591,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       }
     }
     if (mm_bot_by >= 0) {
-      DRAW_SHADOWED("mm", f_tiny, GRect(w - 27, mm_bot_by, 28, 12),
+      DRAW_SHADOWED("mm", f_tiny, GRect(w - 26, mm_bot_by, 26, 12),
                     GTextOverflowModeWordWrap, GTextAlignmentRight);
     }
   }
