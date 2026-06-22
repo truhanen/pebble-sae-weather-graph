@@ -49,7 +49,15 @@
       "PRECIP_UNIT",
       "SUN_CONDITION",
       "UV_INDEX",
-      "RELATIVE_HUMIDITY"
+      "RELATIVE_HUMIDITY",
+      "SHOW_CLOUD",
+      "SHOW_PRECIP",
+      "SHOW_HUMIDITY",
+      "SHOW_WIND",
+      "SHOW_UV",
+      "SHOW_DAWN_DUSK",
+      "SHOW_GOLDEN_HOUR",
+      "SHOW_DARKNESS"
     ],
     "resources": {
       "media": []

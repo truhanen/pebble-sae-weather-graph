@@ -11,15 +11,36 @@
 /* ---------- settings (persisted) ---------- */
 
 typedef struct {
-  int temp_unit;    /* 0=Celsius, 1=Fahrenheit */
-  int wind_unit;    /* 0=m/s, 1=km/h, 2=mph */
-  int precip_unit;  /* 0=mm, 1=inch */
+  int version;
+  int temp_unit;         /* 0=Celsius, 1=Fahrenheit */
+  int wind_unit;         /* 0=m/s, 1=km/h, 2=mph */
+  int precip_unit;       /* 0=mm, 1=inch */
+  uint8_t show_cloud;
+  uint8_t show_precip;
+  uint8_t show_humidity;
+  uint8_t show_wind;
+  uint8_t show_uv;
+  uint8_t show_dawn_dusk;
+  uint8_t show_golden_hour;
+  uint8_t show_darkness;
 } AppSettings;
 
-static AppSettings s_settings = { .temp_unit = 0 };
+#define SETTINGS_VERSION 2
+
+static AppSettings s_settings = {
+  .version = SETTINGS_VERSION,
+  .temp_unit = 0, .wind_unit = 0, .precip_unit = 0,
+  .show_cloud = 1, .show_precip = 1, .show_humidity = 1,
+  .show_wind = 1, .show_uv = 1,
+  .show_dawn_dusk = 1, .show_golden_hour = 1, .show_darkness = 1,
+};
 
 static void prv_load_settings(void) {
-  persist_read_data(SETTINGS_KEY, &s_settings, sizeof(s_settings));
+  AppSettings loaded = {0};
+  if (persist_read_data(SETTINGS_KEY, &loaded, sizeof(loaded)) > 0 &&
+      loaded.version == SETTINGS_VERSION) {
+    s_settings = loaded;
+  }
 }
 
 static void prv_save_settings(void) {
@@ -171,6 +192,25 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
     layer_mark_dirty(s_graph_layer);
   }
 
+#define HANDLE_TOGGLE(key, field) do { \
+  Tuple *_t = dict_find(iter, MESSAGE_KEY_##key); \
+  if (_t) { \
+    s_settings.field = (_t->type == TUPLE_CSTRING) \
+      ? (uint8_t)atoi(_t->value->cstring) : (uint8_t)_t->value->int32; \
+    prv_save_settings(); \
+    layer_mark_dirty(s_graph_layer); \
+  } \
+} while(0)
+  HANDLE_TOGGLE(SHOW_CLOUD,       show_cloud);
+  HANDLE_TOGGLE(SHOW_PRECIP,      show_precip);
+  HANDLE_TOGGLE(SHOW_HUMIDITY,    show_humidity);
+  HANDLE_TOGGLE(SHOW_WIND,        show_wind);
+  HANDLE_TOGGLE(SHOW_UV,          show_uv);
+  HANDLE_TOGGLE(SHOW_DAWN_DUSK,   show_dawn_dusk);
+  HANDLE_TOGGLE(SHOW_GOLDEN_HOUR, show_golden_hour);
+  HANDLE_TOGGLE(SHOW_DARKNESS,    show_darkness);
+#undef HANDLE_TOGGLE
+
   /* UV index may arrive as a separate follow-up message (no STATUS) */
   Tuple *uv_followup_t = dict_find(iter, MESSAGE_KEY_UV_INDEX);
   if (uv_followup_t && uv_followup_t->type == TUPLE_BYTE_ARRAY && !dict_find(iter, MESSAGE_KEY_STATUS)) {
@@ -298,7 +338,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   const int w  = bounds.size.w;
   const int h  = bounds.size.h;
-  const int gt = TITLE_HEIGHT + (s_cloud_count > 0 ? CLOUD_HEIGHT : 0);
+  const int gt = TITLE_HEIGHT + (s_settings.show_cloud && s_cloud_count > 0 ? CLOUD_HEIGHT : 0);
   const int gb = h - TLABEL_HEIGHT - BOTTOM_PAD;
   const int gh = gb - gt;
   const int precip_top = gt + 3;  /* small gap below cloud strip; also top of vertical grid lines */
@@ -342,7 +382,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
 } while(0)
 
   /* ---- cloud cover strip (between title bar and graph) ---- */
-  if (s_cloud_count > 0) {
+  if (s_settings.show_cloud && s_cloud_count > 0) {
     const int cloud_gap = 2;                          /* px gap below title bar separator */
     const int cloud_max_h = CLOUD_HEIGHT - cloud_gap; /* 10px usable */
     const int strip_mid = TITLE_HEIGHT + cloud_gap + cloud_max_h / 2;
@@ -380,7 +420,9 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   if (g_high < max_t) g_high += t_step;
   if (g_high == g_low) g_high = g_low + t_step;  /* guard against flat data */
   /* Fix pixel positions: g_low just above weekday labels, g_high with room for top label */
-  const int y_low  = gb - 3 - TLABEL_HEIGHT - 8;  /* 8px above top label row (2 gap + 2 bar + 1 gap + 3 tick) */
+  bool sun_visible = s_sun_count > 0 &&
+    (s_settings.show_dawn_dusk || s_settings.show_golden_hour || s_settings.show_darkness);
+  const int y_low  = gb - 3 - TLABEL_HEIGHT - (sun_visible ? 8 : 0);
   const int y_high = gt + 18;                      /* room for f_medium label + gap */
 
   /* ---- grid lines (every t_step degrees) ---- */
@@ -448,7 +490,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
 
   int precip_max_p = 20;
   int precip_max_bar_h = scale_half - tiny_lbl_h;
-  if (s_precip_count > 0) {
+  if (s_settings.show_precip && s_precip_count > 0) {
     for (int i = 0; i < s_precip_count; i++) {
       int p = (int)s_precip[i];
       if (p > precip_max_p) precip_max_p = p;
@@ -468,7 +510,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- precipitation axis ticks (lines only, labels drawn later on top) ---- */
-  if (s_precip_count > 0) {
+  if (s_settings.show_precip && s_precip_count > 0) {
     graphics_context_set_stroke_color(ctx, GColorLightGray);
     graphics_context_set_stroke_width(ctx, 1);
     graphics_draw_line(ctx, GPoint(w - 13, precip_top), GPoint(w, precip_top));
@@ -490,7 +532,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- precipitation bars (hanging from precip_top, growing downward) ---- */
-  if (s_precip_count > 0) {
+  if (s_settings.show_precip && s_precip_count > 0) {
     graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorVividCerulean, GColorDarkGray));
     if (s_zoom_days == 1) {
       for (int i = 0; i < n; i++) {
@@ -522,7 +564,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   int wind_max_disp   = 5;    /* display-unit max — hoisted for label section */
   int wind_step       = 5;    /* display-unit tick step — hoisted */
   int wind_scale_top_y = -1;  /* hoisted: needed for unit label position */
-  if (s_wind_count > 0 && s_wind_gust_count > 0) {
+  if (s_settings.show_wind && s_wind_count > 0 && s_wind_gust_count > 0) {
     for (int i = 0; i < s_wind_count; i++) {
       if (s_wind_speed[i] != 255 && (int)s_wind_speed[i] > wind_max_spd_ms)
         wind_max_spd_ms = s_wind_speed[i];
@@ -618,7 +660,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- Relative humidity curve (blue, top half of graph area) ---- */
-  if (s_humidity_count > 0) {
+  if (s_settings.show_humidity && s_humidity_count > 0) {
     const int hum_top_y = precip_top;            /* 0% = top of precip area */
     const int hum_bot_y = y_high + (y_low - y_high) / 3; /* 100% = 1/3 down graph area */
 #define HUM_Y(rh) (hum_top_y + (rh) * (hum_bot_y - hum_top_y) / 100)
@@ -670,7 +712,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- UV index curve (orange, bottom half of graph area) ---- */
-  if (s_uv_count > 0) {
+  if (s_settings.show_uv && s_uv_count > 0) {
     const int uv_bot = y_low;
     const int uv_top = (y_high + y_low) / 2;
 #define UV_Y(uv) (uv_bot - (uv) * (uv_bot - uv_top) / 16)
@@ -725,7 +767,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- wind scale labels (drawn after temp curve so they appear on top) ---- */
-  if (s_wind_count > 0 && s_wind_gust_count > 0) {
+  if (s_settings.show_wind && s_wind_count > 0 && s_wind_gust_count > 0) {
     const int wbot = y_low;
     const int wh   = wbot - wind_top_y;
     for (int s = wind_step; s <= wind_max_disp; s += wind_step) {
@@ -759,7 +801,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
 
   /* ---- precipitation labels (drawn on top) ---- */
   int mm_bot_by = -1;
-  if (s_precip_count > 0) {
+  if (s_settings.show_precip && s_precip_count > 0) {
     int mm_top_by = -1;
     if (inch_tick_hund > 0) {
       for (int t = inch_tick_hund; t * 254 / 100 <= precip_max_p; t += inch_tick_hund) {
@@ -798,10 +840,12 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- sun condition bars + sunrise/sunset ticks ---- */
-  if (s_sun_count > 0) {
+  if (s_sun_count > 0 && (s_settings.show_golden_hour || s_settings.show_darkness || s_settings.show_dawn_dusk)) {
     const int sun_y    = y_low + 2;   /* top of 2px bar */
     const int tick_top = sun_y + 1;   /* overlaps bottom row of bar */
-    graphics_context_set_stroke_width(ctx, 1);
+    const int bar_sw = s_zoom_days == 1 ? 2 : 1;
+    const int bar_y  = sun_y + bar_sw / 2;  /* center of bar for stroke drawing */
+    graphics_context_set_stroke_width(ctx, bar_sw);
     for (int i = 0; i < n; i++) {
       int abs_i = view_start + i;
       if (abs_i >= s_sun_count) break;
@@ -816,15 +860,23 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       else if (sc >= 100) { base = 1; tick_min = sc - 100; tick_rise = true; }
 
       /* draw bar */
-      GColor bar_color = (base == 2) ? GColorDarkGray : GColorOrange;
-      graphics_context_set_fill_color(ctx, bar_color);
       int bx = X(i);
       int bw = X(i + 1) - bx;
       if (bw < 1) bw = 1;
-      graphics_fill_rect(ctx, GRect(bx, sun_y, bw, 2), 0, GCornerNone);
+      bool draw_full_bar = (base == 2) ? s_settings.show_darkness : s_settings.show_golden_hour;
+      if (draw_full_bar) {
+        GColor bar_color = (base == 2) ? GColorDarkGray : GColorOrange;
+        graphics_context_set_stroke_color(ctx, bar_color);
+        graphics_draw_line(ctx, GPoint(bx, bar_y), GPoint(bx + bw - 1, bar_y));
+      } else if (base == 1 && s_settings.show_dawn_dusk && tick_min >= 0) {
+        /* Stub length = tick diagonal = 4√2 ≈ 6px, centered at tick position */
+        int tx = bx + bw * tick_min / 60;
+        graphics_context_set_stroke_color(ctx, GColorOrange);
+        graphics_draw_line(ctx, GPoint(tx - 4, bar_y), GPoint(tx + 4, bar_y));
+      }
 
       /* draw tick */
-      if (tick_min >= 0) {
+      if (s_settings.show_dawn_dusk && tick_min >= 0) {
         int tx = bx + bw * tick_min / 60;
         graphics_context_set_stroke_color(ctx, GColorOrange);
         graphics_context_set_stroke_width(ctx, s_zoom_days == 1 ? 2 : 1);
@@ -835,6 +887,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
           /* "\" sunset: crosses bar, slopes down left-to-right */
           graphics_draw_line(ctx, GPoint(tx - 2, sun_y - 1), GPoint(tx + 2, sun_y + 3));
         }
+        graphics_context_set_stroke_width(ctx, bar_sw);
       }
     }
   }

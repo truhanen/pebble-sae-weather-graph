@@ -35,6 +35,58 @@ module.exports = [
     ]
   },
   {
+    "type": "heading",
+    "defaultValue": "Layers"
+  },
+  {
+    "type": "toggle",
+    "messageKey": "SHOW_CLOUD",
+    "label": "Cloud cover",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "SHOW_PRECIP",
+    "label": "Precipitation",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "SHOW_HUMIDITY",
+    "label": "Relative humidity",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "SHOW_WIND",
+    "label": "Wind speed & direction",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "SHOW_UV",
+    "label": "UV index",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "SHOW_GOLDEN_HOUR",
+    "label": "Golden hour",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "SHOW_DARKNESS",
+    "label": "Darkness",
+    "defaultValue": true
+  },
+  {
+    "type": "toggle",
+    "messageKey": "SHOW_DAWN_DUSK",
+    "label": "Dawn & dusk ticks",
+    "defaultValue": true
+  },
+  {
     "type": "submit",
     "defaultValue": "Save"
   }
