@@ -13,7 +13,7 @@ var DEBUG_COORDS = null;  /* set to an object to use test coordinates */
 var FMI_WFS_BASE = 'https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0' +
   '&request=getFeature' +
   '&storedquery_id=fmi::forecast::edited::weather::scandinavia::point::timevaluepair' +
-  '&parameters=Temperature,Precipitation1h,WindSpeedMS,WindDirection,HourlyMaximumGust,TotalCloudCover&timestep=60';
+  '&parameters=Temperature,Precipitation1h,WindSpeedMS,WindDirection,HourlyMaximumGust,TotalCloudCover,Humidity&timestep=60';
 
 var pendingFetch = false;
 
@@ -167,7 +167,7 @@ function fetchOpenMeteo(lat, lon, fallbackName) {
   var url = 'https://api.open-meteo.com/v1/forecast' +
     '?latitude=' + lat.toFixed(4) +
     '&longitude=' + lon.toFixed(4) +
-    '&hourly=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,uv_index' +
+    '&hourly=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,uv_index,relative_humidity_2m' +
     '&wind_speed_unit=ms' +
     '&timeformat=unixtime' +
     '&forecast_days=9' +
@@ -249,6 +249,7 @@ function parseAndSendOpenMeteo(json, startTime, fallbackName) {
   var wgustRaw = h.wind_gusts_10m;
   var cloudRaw = h.cloud_cover;
   var uvRaw    = h.uv_index;
+  var humRawOM = h.relative_humidity_2m;
 
   /* Find index of startTime (yesterday midnight local = UTC midnight - offset) */
   var startSec = startTime.getTime() / 1000;
@@ -261,7 +262,7 @@ function parseAndSendOpenMeteo(json, startTime, fallbackName) {
   if (count < 1) { console.log('Open-Meteo: no usable data'); sendStatus(2); return; }
 
   var temperatures = [];
-  var precipByteArray = [], wspdByteArray = [], wdirByteArray = [], wgustByteArray = [], cloudByteArray = [], uvByteArray = [];
+  var precipByteArray = [], wspdByteArray = [], wdirByteArray = [], wgustByteArray = [], cloudByteArray = [], uvByteArray = [], humByteArrayOM = [];
 
   for (var i = 0; i < count; i++) {
     var idx = startIdx + i;
@@ -286,6 +287,9 @@ function parseAndSendOpenMeteo(json, startTime, fallbackName) {
 
     var u = uvRaw ? uvRaw[idx] : null;
     uvByteArray.push((u === null || u === undefined || isNaN(u)) ? 255 : Math.min(16, Math.round(u)));
+
+    var hv = humRawOM ? humRawOM[idx] : null;
+    humByteArrayOM.push((hv === null || hv === undefined || isNaN(hv)) ? 255 : Math.min(100, Math.max(0, Math.round(hv))));
   }
 
   if (temperatures.length === 0) { console.log('Open-Meteo: empty temperatures'); sendStatus(2); return; }
@@ -334,6 +338,8 @@ function parseAndSendOpenMeteo(json, startTime, fallbackName) {
   msg.SUN_CONDITION = sunByteArray;
   var nonNaNUV = uvByteArray.filter(function(v) { return v !== 255; }).length;
   if (nonNaNUV > 0)    { msg.UV_INDEX       = uvByteArray; }
+  var nonNaNHumOM = humByteArrayOM.filter(function(v) { return v !== 255; }).length;
+  if (nonNaNHumOM > 0) { msg.RELATIVE_HUMIDITY = humByteArrayOM; }
 
   Pebble.sendAppMessage(
     msg,
@@ -366,6 +372,7 @@ function parseAndSend(xml, startTime, lat, lon, fallbackName) {
   var wdirRaw   = extractSeries(xml, 'WindDirection');
   var wgustRaw  = extractSeries(xml, 'HourlyMaximumGust');
   var cloudRaw  = extractSeries(xml, 'TotalCloudCover');
+  var humRaw    = extractSeries(xml, 'Humidity');
 
   // Truncate temperatures at first NaN
   var temperatures = [];
@@ -418,6 +425,13 @@ function parseAndSend(xml, startTime, lat, lon, fallbackName) {
   for (var i = 0; i < temperatures.length; i++) {
     var c = (i < cloudRaw.length && !isNaN(cloudRaw[i])) ? cloudRaw[i] : NaN;
     cloudByteArray.push(isNaN(c) ? 255 : Math.min(100, Math.round(c)));
+  }
+
+  // Relative humidity: 0-100% as uint8, 255=NaN
+  var humByteArray = [];
+  for (var i = 0; i < temperatures.length; i++) {
+    var h = (i < humRaw.length && !isNaN(humRaw[i])) ? humRaw[i] : NaN;
+    humByteArray.push(isNaN(h) ? 255 : Math.min(100, Math.max(0, Math.round(h))));
   }
 
   // Sun condition: 0=normal, 1=golden, 2=dark; 100+min=sunrise golden, 160+min=sunset golden
@@ -473,6 +487,8 @@ function parseAndSend(xml, startTime, lat, lon, fallbackName) {
   if (nonNaNGust > 0)  { msg.WIND_GUST      = wgustByteArray; }
   if (nonNaNCloud > 0) { msg.CLOUD_COVER    = cloudByteArray; }
   msg.SUN_CONDITION = sunByteArray;
+  var nonNaNHum = humByteArray.filter(function(v) { return v !== 255; }).length;
+  if (nonNaNHum > 0)   { msg.RELATIVE_HUMIDITY = humByteArray; }
 
   Pebble.sendAppMessage(
     msg,

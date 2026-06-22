@@ -48,7 +48,8 @@
       "WIND_UNIT",
       "PRECIP_UNIT",
       "SUN_CONDITION",
-      "UV_INDEX"
+      "UV_INDEX",
+      "RELATIVE_HUMIDITY"
     ],
     "resources": {
       "media": []

@@ -43,6 +43,7 @@ static uint8_t    s_wind_gust[MAX_TEMPS];   /* whole m/s, 255=NaN */
 static uint8_t    s_cloud[MAX_TEMPS];       /* 0-100%, 255=NaN */
 static uint8_t    s_sun_cond[MAX_TEMPS];    /* 0=normal, 1=golden, 2=dark */
 static uint8_t    s_uv[MAX_TEMPS];          /* 0-16, 255=NaN */
+static uint8_t    s_humidity[MAX_TEMPS];    /* 0-100%, 255=NaN */
 static int        s_temp_count       = 0;
 static int        s_precip_count     = 0;
 static int        s_wind_count       = 0;
@@ -50,6 +51,7 @@ static int        s_wind_gust_count  = 0;
 static int        s_cloud_count      = 0;
 static int        s_sun_count        = 0;
 static int        s_uv_count         = 0;
+static int        s_humidity_count   = 0;
 static int        s_current_idx      = 0;
 static int        s_current_min      = 0;
 static int        s_local_start_h    = 0;
@@ -190,6 +192,7 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
     s_wind_gust_count = 0;
     s_cloud_count = 0;
     s_sun_count = 0;
+    s_humidity_count = 0;
 
     Tuple *temps_t  = dict_find(iter, MESSAGE_KEY_TEMPERATURES);
     Tuple *precip_t = dict_find(iter, MESSAGE_KEY_PRECIPITATION);
@@ -244,6 +247,13 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
       s_uv_count = n;
       const uint8_t *raw = (const uint8_t *)uv_t->value->data;
       for (int i = 0; i < n; i++) s_uv[i] = raw[i];
+    }
+    Tuple *hum_t = dict_find(iter, MESSAGE_KEY_RELATIVE_HUMIDITY);
+    if (hum_t && hum_t->type == TUPLE_BYTE_ARRAY) {
+      int n = (int)hum_t->length < MAX_TEMPS ? (int)hum_t->length : MAX_TEMPS;
+      s_humidity_count = n;
+      const uint8_t *raw = (const uint8_t *)hum_t->value->data;
+      for (int i = 0; i < n; i++) s_humidity[i] = raw[i];
     }
     Tuple *wgust_t = dict_find(iter, MESSAGE_KEY_WIND_GUST);
     if (wgust_t && wgust_t->type == TUPLE_BYTE_ARRAY) {
@@ -607,6 +617,58 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       GPoint(X(i + 1), YC(TC((int)s_temps[view_start + i + 1]))));
   }
 
+  /* ---- Relative humidity curve (blue, top half of graph area) ---- */
+  if (s_humidity_count > 0) {
+    const int hum_top_y = precip_top;            /* 0% = top of precip area */
+    const int hum_bot_y = y_high + (y_low - y_high) / 3; /* 100% = 1/3 down graph area */
+#define HUM_Y(rh) (hum_top_y + (rh) * (hum_bot_y - hum_top_y) / 100)
+    graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorCobaltBlue, GColorDarkGray));
+    graphics_context_set_stroke_width(ctx, 2);
+    int prev_x = -1, prev_y = -1;
+    for (int i = 0; i < n; i++) {
+      int abs_i = view_start + i;
+      if (abs_i >= s_humidity_count) break;
+      uint8_t rh = s_humidity[abs_i];
+      if (rh == 255) { prev_x = prev_y = -1; continue; }
+      int cx = X(i), cy = HUM_Y(rh);
+      if (cy < hum_top_y) cy = hum_top_y;
+      if (cy > hum_bot_y) cy = hum_bot_y;
+      if (prev_x >= 0)
+        graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(cx, cy));
+      prev_x = cx; prev_y = cy;
+    }
+    /* ---- humidity local peak labels (zoomed-in view only, ±6h window) ---- */
+    if (s_zoom_days == 1) {
+      for (int i = 0; i < n; i++) {
+        int abs_i = view_start + i;
+        if (abs_i >= s_humidity_count) break;
+        uint8_t rh = s_humidity[abs_i];
+        if (rh == 255) continue;
+        /* Is this the maximum in [abs_i-6, abs_i+6]? Use leftmost occurrence for ties. */
+        bool is_peak = true;
+        for (int j = abs_i - 6; j <= abs_i + 6 && is_peak; j++) {
+          if (j == abs_i || j < 0 || j >= s_humidity_count) continue;
+          uint8_t rhj = s_humidity[j];
+          if (rhj == 255) continue;
+          if ((int)rhj > (int)rh || ((int)rhj == (int)rh && j < abs_i))
+            is_peak = false;
+        }
+        if (!is_peak) continue;
+        int cx = X(i);
+        int cy = HUM_Y(rh);
+        if (cy < hum_top_y) cy = hum_top_y;
+        if (cy > hum_bot_y) cy = hum_bot_y;
+        char lbl[5]; snprintf(lbl, sizeof(lbl), "%d%%", (int)rh);
+        int lx = cx - 20;
+        if (lx >= 18 && lx + 40 <= w - 18) {
+          DRAW_SHADOWED(lbl, f_medium, GRect(lx, cy + 2, 40, 16),
+                        GTextOverflowModeWordWrap, GTextAlignmentCenter);
+        }
+      }
+    }
+#undef HUM_Y
+  }
+
   /* ---- UV index curve (orange, bottom half of graph area) ---- */
   if (s_uv_count > 0) {
     const int uv_bot = y_low;
@@ -642,10 +704,14 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
           if (cy > uv_bot) cy = uv_bot;
           char lbl[3]; snprintf(lbl, sizeof(lbl), "%d", day_max_uv);
           int num_w = (day_max_uv >= 10) ? 16 : 8;
-          DRAW_SHADOWED(lbl, f_medium, GRect(cx + 2, cy - 16, 20, 18),
-                        GTextOverflowModeWordWrap, GTextAlignmentLeft);
-          DRAW_SHADOWED("UV", f_tiny, GRect(cx + 2 + num_w, cy - 14, 20, 10),
-                        GTextOverflowModeWordWrap, GTextAlignmentLeft);
+          int uv_lx = cx + 2;
+          int uv_rx = cx + 2 + num_w + 20; /* right edge of "UV" text */
+          if (uv_lx >= 18 && uv_rx <= w - 18) {
+            DRAW_SHADOWED(lbl, f_medium, GRect(cx + 2, cy - 16, 20, 18),
+                          GTextOverflowModeWordWrap, GTextAlignmentLeft);
+            DRAW_SHADOWED("UV", f_tiny, GRect(cx + 2 + num_w, cy - 14, 20, 10),
+                          GTextOverflowModeWordWrap, GTextAlignmentLeft);
+          }
           day_max_uv = -1; day_max_rel = -1;
         }
         if (i == n) break;
