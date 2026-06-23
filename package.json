@@ -56,7 +56,13 @@
       "SHOW_GOLDEN_HOUR",
       "SHOW_DARKNESS",
       "TIME_FORMAT",
-      "DATE_FORMAT"
+      "DATE_FORMAT",
+      "PRESET_NAME_1",
+      "PRESET_NAME_2",
+      "PRESET_NAME_3",
+      "PRESET_NAME_4",
+      "PRESET_NAME_5",
+      "SELECTED_PRESET"
     ],
     "resources": {
       "media": []

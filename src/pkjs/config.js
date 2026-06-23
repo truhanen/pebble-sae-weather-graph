@@ -88,9 +88,47 @@ module.exports = [
   },
   {
     "type": "heading",
-    "defaultValue": "Formats"
+    "defaultValue": "Preset Locations"
   },
   {
+    "type": "input",
+    "messageKey": "PRESET_NAME_1",
+    "defaultValue": "",
+    "label": "Location 1",
+    "attributes": { "placeholder": "e.g. Paris", "maxlength": 32 }
+  },
+  {
+    "type": "input",
+    "messageKey": "PRESET_NAME_2",
+    "defaultValue": "",
+    "label": "Location 2",
+    "attributes": { "placeholder": "e.g. Tokyo", "maxlength": 32 }
+  },
+  {
+    "type": "input",
+    "messageKey": "PRESET_NAME_3",
+    "defaultValue": "",
+    "label": "Location 3",
+    "attributes": { "placeholder": "", "maxlength": 32 }
+  },
+  {
+    "type": "input",
+    "messageKey": "PRESET_NAME_4",
+    "defaultValue": "",
+    "label": "Location 4",
+    "attributes": { "placeholder": "", "maxlength": 32 }
+  },
+  {
+    "type": "input",
+    "messageKey": "PRESET_NAME_5",
+    "defaultValue": "",
+    "label": "Location 5",
+    "attributes": { "placeholder": "", "maxlength": 32 }
+  },
+  {
+    "type": "heading",
+    "defaultValue": "Formats"
+  },  {
     "type": "select",
     "messageKey": "TIME_FORMAT",
     "defaultValue": 0,

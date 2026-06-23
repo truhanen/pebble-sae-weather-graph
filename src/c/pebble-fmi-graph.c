@@ -85,6 +85,8 @@ static int        s_local_start_wday = 0;  /* JS getDay(): 0=Sun */
 static int        s_local_start_day  = 1;  /* day of month */
 static int        s_local_start_mon  = 1;  /* month 1-12 */
 static char       s_location[33]     = "";
+static char       s_preset_names[5][33] = {"","","","",""};
+static int        s_selected_preset  = 0;  /* 0=GPS, 1-5=preset */
 static int        s_zoom_days        = 5;  /* 1 or 5 */
 static int        s_view_count       = 120; /* animated: current view width in hours */
 static Animation *s_zoom_anim        = NULL;
@@ -158,6 +160,7 @@ static void prv_request_data(void) {
   DictionaryIterator *iter;
   if (app_message_outbox_begin(&iter) != APP_MSG_OK) return;
   dict_write_int8(iter, MESSAGE_KEY_REQUEST_DATA, 1);
+  dict_write_int8(iter, MESSAGE_KEY_SELECTED_PRESET, (int8_t)s_selected_preset);
   app_message_outbox_send();
 }
 
@@ -229,6 +232,20 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
     s_settings.date_format = (df_t->type == TUPLE_CSTRING)
       ? atoi(df_t->value->cstring) : (int)df_t->value->int32;
     prv_save_settings(); layer_mark_dirty(s_graph_layer);
+  }
+
+  /* Preset location names from JS */
+  {
+    uint32_t preset_keys[5] = {
+      MESSAGE_KEY_PRESET_NAME_1, MESSAGE_KEY_PRESET_NAME_2, MESSAGE_KEY_PRESET_NAME_3,
+      MESSAGE_KEY_PRESET_NAME_4, MESSAGE_KEY_PRESET_NAME_5
+    };
+    for (int pi = 0; pi < 5; pi++) {
+      Tuple *pt = dict_find(iter, preset_keys[pi]);
+      if (pt && pt->type == TUPLE_CSTRING) {
+        snprintf(s_preset_names[pi], sizeof(s_preset_names[pi]), "%s", pt->value->cstring);
+      }
+    }
   }
 
   /* UV index may arrive as a separate follow-up message (no STATUS) */
@@ -1516,8 +1533,89 @@ static void prv_up_click(ClickRecognizerRef r, void *ctx) {
   prv_start_scroll_anim(target);
 }
 
+/* ---------- location menu ---------- */
+
+#define MAX_MENU_ROWS 6  /* GPS + 5 presets */
+
+static Window          *s_loc_menu_window = NULL;
+static SimpleMenuLayer *s_loc_menu_layer  = NULL;
+static SimpleMenuItem   s_loc_menu_items[MAX_MENU_ROWS];
+static SimpleMenuSection s_loc_menu_section;
+static int              s_loc_menu_count  = 0;
+static int              s_loc_menu_indices[MAX_MENU_ROWS]; /* maps row → preset idx (0=GPS) */
+
+static void prv_loc_menu_select(int index, void *ctx) {
+  s_selected_preset = s_loc_menu_indices[index];
+  window_stack_pop(true);
+  s_status = STATUS_LOADING;
+  prv_update_status_layer();
+  prv_request_data();
+}
+
+static void prv_loc_menu_window_load(Window *window) {
+  s_loc_menu_count = 0;
+
+  /* Row 0: GPS */
+  s_loc_menu_items[s_loc_menu_count] = (SimpleMenuItem){
+    .title = "GPS location",
+    .callback = prv_loc_menu_select,
+  };
+  s_loc_menu_indices[s_loc_menu_count] = 0;
+  s_loc_menu_count++;
+
+  /* Rows 1-5: configured presets */
+  for (int i = 0; i < 5; i++) {
+    if (s_preset_names[i][0] != '\0') {
+      s_loc_menu_items[s_loc_menu_count] = (SimpleMenuItem){
+        .title = s_preset_names[i],
+        .callback = prv_loc_menu_select,
+      };
+      s_loc_menu_indices[s_loc_menu_count] = i + 1;
+      s_loc_menu_count++;
+    }
+  }
+
+  s_loc_menu_section = (SimpleMenuSection){
+    .title = "Location",
+    .items = s_loc_menu_items,
+    .num_items = s_loc_menu_count,
+  };
+
+  Layer *root = window_get_root_layer(window);
+  GRect bounds = layer_get_bounds(root);
+  s_loc_menu_layer = simple_menu_layer_create(bounds, window, &s_loc_menu_section, 1, NULL);
+
+  /* Highlight current selection */
+  for (int i = 0; i < s_loc_menu_count; i++) {
+    if (s_loc_menu_indices[i] == s_selected_preset) {
+      menu_layer_set_selected_index(simple_menu_layer_get_menu_layer(s_loc_menu_layer),
+                                    MenuIndex(0, i), MenuRowAlignCenter, false);
+      break;
+    }
+  }
+  layer_add_child(root, simple_menu_layer_get_layer(s_loc_menu_layer));
+}
+
+static void prv_loc_menu_window_unload(Window *window) {
+  simple_menu_layer_destroy(s_loc_menu_layer);
+  s_loc_menu_layer = NULL;
+  window_destroy(s_loc_menu_window);
+  s_loc_menu_window = NULL;
+}
+
+static void prv_open_loc_menu(ClickRecognizerRef r, void *ctx) {
+  if (s_loc_menu_window) return;  /* already open */
+  s_loc_menu_window = window_create();
+  window_set_window_handlers(s_loc_menu_window, (WindowHandlers){
+    .load   = prv_loc_menu_window_load,
+    .unload = prv_loc_menu_window_unload,
+  });
+  window_stack_push(s_loc_menu_window, true);
+}
+
 static void prv_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_SELECT, prv_select_click);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 500, prv_open_loc_menu, NULL);
   window_single_click_subscribe(BUTTON_ID_DOWN,   prv_down_click);
   window_single_click_subscribe(BUTTON_ID_UP,     prv_up_click);
 }

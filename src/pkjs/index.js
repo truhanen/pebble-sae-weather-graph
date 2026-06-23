@@ -2,7 +2,85 @@
 
 var Clay = require('pebble-clay');
 var clayConfig = require('./config');
-var clay = new Clay(clayConfig);
+var clay = new Clay(clayConfig, function() {
+  var clayConfig = this;
+
+  clayConfig.on(clayConfig.EVENTS.AFTER_BUILD, function() {
+    for (var i = 1; i <= 5; i++) {
+      var item = clayConfig.getItemByMessageKey('PRESET_NAME_' + i);
+      if (item) {
+        addGeoAutocomplete(item.$manipulatorTarget[0]);
+      }
+    }
+  });
+
+  function addGeoAutocomplete(input) {
+    if (!input) return;
+    var timer = null;
+
+    /* Wrapper needs relative positioning for the dropdown */
+    var wrapper = input.parentNode;
+    wrapper.style.position = 'relative';
+
+    var dropdown = document.createElement('div');
+    dropdown.style.cssText = [
+      'position:absolute', 'top:100%', 'left:0', 'right:0', 'z-index:9999',
+      'background:#fff', 'border:1px solid #ccc', 'border-top:none',
+      'box-shadow:0 2px 6px rgba(0,0,0,0.15)', 'max-height:180px',
+      'overflow-y:auto', 'display:none', 'border-radius:0 0 4px 4px'
+    ].join(';');
+    wrapper.appendChild(dropdown);
+
+    input.addEventListener('input', function() {
+      clearTimeout(timer);
+      var val = (input.value || '').trim();
+      if (val.length < 2) { dropdown.style.display = 'none'; return; }
+      timer = setTimeout(function() { fetchSuggestions(val); }, 300);
+    });
+
+    input.addEventListener('blur', function() {
+      /* Small delay so click on dropdown item fires first */
+      setTimeout(function() { dropdown.style.display = 'none'; }, 150);
+    });
+
+    function fetchSuggestions(query) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', 'https://geocoding-api.open-meteo.com/v1/search?name=' +
+        encodeURIComponent(query) + '&count=5&language=en&format=json');
+      xhr.onload = function() {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          var results = data.results || [];
+          dropdown.innerHTML = '';
+          if (!results.length) { dropdown.style.display = 'none'; return; }
+          results.forEach(function(r) {
+            var parts = [r.name];
+            if (r.admin1) parts.push(r.admin1);
+            if (r.country) parts.push(r.country);
+            var label = parts.join(', ');
+            var row = document.createElement('div');
+            row.textContent = label;
+            row.style.cssText = 'padding:7px 10px;cursor:pointer;font-size:14px;' +
+              'border-bottom:1px solid #f0f0f0;color:#222;';
+            row.addEventListener('mousedown', function(e) {
+              e.preventDefault();
+              /* Store the place name as typed — geocoding will use this on the watch */
+              input.value = r.name + (r.country ? ', ' + r.country : '');
+              input.dispatchEvent(new Event('change', {bubbles: true}));
+              dropdown.style.display = 'none';
+            });
+            row.addEventListener('mouseover', function() { row.style.background = '#e8f0fe'; });
+            row.addEventListener('mouseout',  function() { row.style.background = ''; });
+            dropdown.appendChild(row);
+          });
+          dropdown.style.display = 'block';
+        } catch(e) { dropdown.style.display = 'none'; }
+      };
+      xhr.onerror = function() { dropdown.style.display = 'none'; };
+      xhr.send();
+    }
+  }
+});
 
 var MAX_TEMPS = 240;
 var DEBUG_FORCE_OPENMETEO = false;  /* set true to always use Open-Meteo endpoint */
@@ -97,6 +175,65 @@ function sunBoundaryMin(lat, lon, startMs, i) {
   return 255;
 }
 
+function getPresetNames() {
+  try {
+    var settings = JSON.parse(localStorage.getItem('clay-settings')) || {};
+    return [
+      (settings.PRESET_NAME_1 || '').trim(),
+      (settings.PRESET_NAME_2 || '').trim(),
+      (settings.PRESET_NAME_3 || '').trim(),
+      (settings.PRESET_NAME_4 || '').trim(),
+      (settings.PRESET_NAME_5 || '').trim()
+    ];
+  } catch(e) { return ['','','','','']; }
+}
+
+function sendPresetNames() {
+  var names = getPresetNames();
+  var msg = {};
+  for (var i = 0; i < 5; i++) {
+    if (names[i]) msg['PRESET_NAME_' + (i + 1)] = names[i].substring(0, 32);
+  }
+  if (Object.keys(msg).length > 0) {
+    Pebble.sendAppMessage(msg,
+      function() { console.log('Preset names sent'); },
+      function(e) { console.log('Preset names send error: ' + JSON.stringify(e)); }
+    );
+  }
+}
+
+function geocodeAndFetch(name) {
+  var url = 'https://geocoding-api.open-meteo.com/v1/search?name=' +
+    encodeURIComponent(name) + '&count=1&language=en&format=json';
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', url);
+  xhr.onload = function() {
+    try {
+      var data = JSON.parse(xhr.responseText);
+      if (data.results && data.results.length > 0) {
+        var r = data.results[0];
+        var displayName = r.name + (r.country ? ', ' + r.country : '');
+        console.log('Geocoded "' + name + '" → ' + displayName + ' (' + r.latitude + ',' + r.longitude + ')');
+        fetchForLatLon(r.latitude, r.longitude, displayName);
+      } else {
+        console.log('Geocoding: no results for "' + name + '"');
+        sendStatus(2);
+        pendingFetch = false;
+      }
+    } catch(e) {
+      console.log('Geocoding parse error: ' + e);
+      sendStatus(2);
+      pendingFetch = false;
+    }
+  };
+  xhr.onerror = function() {
+    console.log('Geocoding request failed for "' + name + '"');
+    sendStatus(2);
+    pendingFetch = false;
+  };
+  xhr.send();
+}
+
 function getTempUnit() {
   try {
     var settings = JSON.parse(localStorage.getItem('clay-settings')) || {};
@@ -108,18 +245,21 @@ function getTempUnit() {
 
 Pebble.addEventListener('ready', function () {
   console.log('PebbleKit JS ready');
+  sendPresetNames();
   fetchForecast();
 });
 
 Pebble.addEventListener('appmessage', function (e) {
   if (e.payload.REQUEST_DATA !== undefined) {
-    fetchForecast();
+    var preset = e.payload.SELECTED_PRESET;
+    fetchForecast(typeof preset === 'number' ? preset : 0);
   }
 });
 
-function fetchForecast() {
+function fetchForecast(presetIndex) {
   if (pendingFetch) return;
   pendingFetch = true;
+  presetIndex = presetIndex || 0;
 
   if (DEBUG_COORDS) {
     if (DEBUG_FORCE_OPENMETEO) {
@@ -128,6 +268,16 @@ function fetchForecast() {
       fetchForLatLon(DEBUG_COORDS.lat, DEBUG_COORDS.lon, DEBUG_COORDS.name);
     }
     return;
+  }
+
+  if (presetIndex >= 1 && presetIndex <= 5) {
+    var names = getPresetNames();
+    var name = names[presetIndex - 1];
+    if (name) {
+      geocodeAndFetch(name);
+      return;
+    }
+    /* preset slot empty — fall through to GPS */
   }
 
   if (navigator.geolocation) {
