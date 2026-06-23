@@ -51,22 +51,50 @@ function elToSunCond(el) {
 }
 
 /* Returns 0/1/2 for normal/golden/dark, or 100+min for sunrise golden,
-   160+min for sunset golden (min = 0-59 within the hour). */
+   160+min for sunset golden (min = 0-59 within the hour).
+   Also handles steep-rise/set case where el enters golden AND crosses 0° in the same hour. */
 function sunConditionWithTick(lat, lon, startMs, i) {
   var el0 = solarElevationDeg(lat, lon, new Date(startMs + i * 3600000));
+  var el1 = solarElevationDeg(lat, lon, new Date(startMs + (i + 1) * 3600000));
   var cond = elToSunCond(el0);
+  function crossMin(thr) {
+    return Math.max(0, Math.min(59, Math.round((thr - el0) / (el1 - el0) * 60)));
+  }
   if (cond === 1) {
-    var el1 = solarElevationDeg(lat, lon, new Date(startMs + (i + 1) * 3600000));
-    if (el0 < 0 && el1 >= 0) {
-      var min = Math.max(0, Math.min(59, Math.round(-el0 / (el1 - el0) * 60)));
-      return 100 + min;  /* sunrise: 100-159 */
-    }
-    if (el0 >= 0 && el1 < 0) {
-      var min = Math.max(0, Math.min(59, Math.round(-el0 / (el1 - el0) * 60)));
-      return 160 + min;  /* sunset: 160-219 */
-    }
+    /* el0 already in golden range: check for 0° crossing */
+    if (el0 < 0 && el1 >= 0) return 100 + crossMin(0);  /* sunrise */
+    if (el0 >= 0 && el1 < 0) return 160 + crossMin(0);  /* sunset  */
+  } else {
+    /* el0 outside golden: check if el enters golden AND crosses 0° this hour */
+    if (el0 < -4 && el1 >= -4 && el1 > 0) return 100 + crossMin(0);  /* steep sunrise */
+    if (el0 > 6  && el1 <= 6  && el1 < 0) return 160 + crossMin(0);  /* steep sunset  */
   }
   return cond;
+}
+
+/* Returns minute-precision boundary info for golden/dark transitions:
+   0-59:    golden starts at minute (el crosses -4° up or +6° down)
+   64-123:  golden ends at minute (val-64, el crosses +6° up or -4° down)
+   128-187: dark starts at minute (val-128, el crosses -18° down)
+   192-251: dark ends at minute (val-192, el crosses -18° up)
+   255: no boundary */
+function sunBoundaryMin(lat, lon, startMs, i) {
+  var el0 = solarElevationDeg(lat, lon, new Date(startMs + i * 3600000));
+  var el1 = solarElevationDeg(lat, lon, new Date(startMs + (i + 1) * 3600000));
+  function crossMin(thr) {
+    return Math.max(0, Math.min(59, Math.round((thr - el0) / (el1 - el0) * 60)));
+  }
+  if (el1 - el0 === 0) return 255;
+  // Golden start: enters [-4,+6] from below (-4°) or above (+6°)
+  if (el0 < -4 && el1 >= -4) return crossMin(-4);
+  if (el0 > 6  && el1 <= 6 && el1 >= -4) return crossMin(6);
+  // Golden end: leaves [-4,+6] upward (+6°) or downward (-4°)
+  if (el0 <= 6  && el0 >= -4 && el1 > 6)  return 64 + crossMin(6);
+  if (el0 >= -4 && el0 <= 6  && el1 < -4) return 64 + crossMin(-4);
+  // Dark start/end: crosses -18°
+  if (el0 > -18 && el1 <= -18) return 128 + crossMin(-18);
+  if (el0 <= -18 && el1 > -18) return 192 + crossMin(-18);
+  return 255;
 }
 
 function getTempUnit() {
@@ -313,10 +341,12 @@ function parseAndSendOpenMeteo(json, startTime, fallbackName) {
   console.log('Open-Meteo: ' + temperatures.length + ' temps, wind=' + nonNaNWind + ', cloud=' + nonNaNCloud + ', loc=' + locationName);
 
   var sunByteArray = [];
+  var sunBminArray = [];
   var oLat = data.latitude, oLon = data.longitude;
   var startMs = startTime.getTime();
   for (var i = 0; i < temperatures.length; i++) {
     sunByteArray.push(sunConditionWithTick(oLat, oLon, startMs, i));
+    sunBminArray.push(sunBoundaryMin(oLat, oLon, startMs, i));
   }
 
   var msg = {
@@ -335,7 +365,8 @@ function parseAndSendOpenMeteo(json, startTime, fallbackName) {
   if (nonNaNWind > 0)  { msg.WIND_DIRECTION = wdirByteArray; }
   if (nonNaNGust > 0)  { msg.WIND_GUST      = wgustByteArray; }
   if (nonNaNCloud > 0) { msg.CLOUD_COVER    = cloudByteArray; }
-  msg.SUN_CONDITION = sunByteArray;
+  msg.SUN_CONDITION   = sunByteArray;
+  msg.SUN_BOUNDARY_MIN = sunBminArray;
   var nonNaNUV = uvByteArray.filter(function(v) { return v !== 255; }).length;
   if (nonNaNUV > 0)    { msg.UV_INDEX       = uvByteArray; }
   var nonNaNHumOM = humByteArrayOM.filter(function(v) { return v !== 255; }).length;
@@ -436,9 +467,11 @@ function parseAndSend(xml, startTime, lat, lon, fallbackName) {
 
   // Sun condition: 0=normal, 1=golden, 2=dark; 100+min=sunrise golden, 160+min=sunset golden
   var sunByteArray = [];
+  var sunBminArray = [];
   var startMs = startTime.getTime();
   for (var i = 0; i < temperatures.length; i++) {
     sunByteArray.push(sunConditionWithTick(lat, lon, startMs, i));
+    sunBminArray.push(sunBoundaryMin(lat, lon, startMs, i));
   }
 
   // Extract location name
@@ -486,7 +519,8 @@ function parseAndSend(xml, startTime, lat, lon, fallbackName) {
   if (nonNaNWind > 0)  { msg.WIND_DIRECTION = wdirByteArray; }
   if (nonNaNGust > 0)  { msg.WIND_GUST      = wgustByteArray; }
   if (nonNaNCloud > 0) { msg.CLOUD_COVER    = cloudByteArray; }
-  msg.SUN_CONDITION = sunByteArray;
+  msg.SUN_CONDITION    = sunByteArray;
+  msg.SUN_BOUNDARY_MIN = sunBminArray;
   var nonNaNHum = humByteArray.filter(function(v) { return v !== 255; }).length;
   if (nonNaNHum > 0)   { msg.RELATIVE_HUMIDITY = humByteArray; }
 

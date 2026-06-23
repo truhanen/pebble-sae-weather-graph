@@ -63,6 +63,8 @@ static uint8_t    s_wind_dir[MAX_TEMPS];    /* dir/360*254, 255=NaN */
 static uint8_t    s_wind_gust[MAX_TEMPS];   /* whole m/s, 255=NaN */
 static uint8_t    s_cloud[MAX_TEMPS];       /* 0-100%, 255=NaN */
 static uint8_t    s_sun_cond[MAX_TEMPS];    /* 0=normal, 1=golden, 2=dark */
+static uint8_t    s_sun_bmin[MAX_TEMPS];    /* boundary minute encoding */
+static int        s_sun_bmin_count     = 0;
 static uint8_t    s_uv[MAX_TEMPS];          /* 0-16, 255=NaN */
 static uint8_t    s_humidity[MAX_TEMPS];    /* 0-100%, 255=NaN */
 static int        s_temp_count       = 0;
@@ -88,6 +90,9 @@ static int        s_scroll_target    = 0;
 static int        s_scroll_anim_start = 0;
 static bool       s_animating        = false;  /* unused, kept for future use */
 static Animation *s_scroll_anim      = NULL;
+
+static bool       s_touch_active     = false;
+static int        s_touch_abs        = 0;   /* absolute hour index shown in popup */
 
 static GPath     *s_wind_arrow       = NULL;
 
@@ -232,6 +237,7 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
     s_wind_gust_count = 0;
     s_cloud_count = 0;
     s_sun_count = 0;
+    s_sun_bmin_count = 0;
     s_humidity_count = 0;
 
     Tuple *temps_t  = dict_find(iter, MESSAGE_KEY_TEMPERATURES);
@@ -280,6 +286,13 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
       s_sun_count = n;
       const uint8_t *raw = (const uint8_t *)sun_t->value->data;
       for (int i = 0; i < n; i++) s_sun_cond[i] = raw[i];
+    }
+    Tuple *bmin_t = dict_find(iter, MESSAGE_KEY_SUN_BOUNDARY_MIN);
+    if (bmin_t && bmin_t->type == TUPLE_BYTE_ARRAY) {
+      int n = (int)bmin_t->length < MAX_TEMPS ? (int)bmin_t->length : MAX_TEMPS;
+      s_sun_bmin_count = n;
+      const uint8_t *raw = (const uint8_t *)bmin_t->value->data;
+      for (int i = 0; i < n; i++) s_sun_bmin[i] = raw[i];
     }
     Tuple *uv_t = dict_find(iter, MESSAGE_KEY_UV_INDEX);
     if (uv_t && uv_t->type == TUPLE_BYTE_ARRAY) {
@@ -332,6 +345,49 @@ static int prv_wind_conv(int ms) {
   if (s_settings.wind_unit == 1) return ms * 36 / 10;   /* km/h */
   if (s_settings.wind_unit == 2) return ms * 2237 / 1000; /* mph */
   return ms;  /* m/s */
+}
+
+static const char *prv_compass(uint8_t dir_byte) {
+  static const char *dirs[] = {"N","NE","E","SE","S","SW","W","NW"};
+  int deg = (int)dir_byte * 360 / 254;
+  return dirs[((deg + 22) / 45) % 8];
+}
+
+static void prv_touch_handler(const TouchEvent *event, void *ctx) {
+  if (s_status != STATUS_READY || s_temp_count < 2) return;
+
+  GRect bounds = layer_get_bounds(s_graph_layer);
+  const int w  = bounds.size.w;
+  const int vc = s_view_count;
+  int n = (s_scroll_offset + vc <= s_temp_count) ? vc : (s_temp_count - s_scroll_offset);
+  if (n < 1) return;
+
+  if (event->type == TouchEvent_Liftoff) {
+    s_touch_active = false;
+    layer_mark_dirty(s_graph_layer);
+    return;
+  }
+
+  int x = event->x;
+  if (x < 0) x = 0;
+  if (x >= w) x = w - 1;
+
+  int hour_rel = x * n / w;
+  int hour_abs = s_scroll_offset + hour_rel;
+  if (hour_abs >= s_temp_count) hour_abs = s_temp_count - 1;
+
+  if (event->type == TouchEvent_Touchdown) {
+    s_touch_active = true;
+    s_touch_abs    = hour_abs;
+    layer_mark_dirty(s_graph_layer);
+    return;
+  }
+
+  /* PositionUpdate: just update which hour we're pointing at */
+  if (s_touch_abs != hour_abs) {
+    s_touch_abs = hour_abs;
+    layer_mark_dirty(s_graph_layer);
+  }
 }
 
 static void prv_graph_update(Layer *layer, GContext *ctx) {
@@ -679,35 +735,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(cx, cy));
       prev_x = cx; prev_y = cy;
     }
-    /* ---- humidity local peak labels (zoomed-in view only, ±6h window) ---- */
-    if (s_zoom_days == 1) {
-      for (int i = 0; i < n; i++) {
-        int abs_i = view_start + i;
-        if (abs_i >= s_humidity_count) break;
-        uint8_t rh = s_humidity[abs_i];
-        if (rh == 255) continue;
-        /* Is this the maximum in [abs_i-6, abs_i+6]? Use leftmost occurrence for ties. */
-        bool is_peak = true;
-        for (int j = abs_i - 6; j <= abs_i + 6 && is_peak; j++) {
-          if (j == abs_i || j < 0 || j >= s_humidity_count) continue;
-          uint8_t rhj = s_humidity[j];
-          if (rhj == 255) continue;
-          if ((int)rhj > (int)rh || ((int)rhj == (int)rh && j < abs_i))
-            is_peak = false;
-        }
-        if (!is_peak) continue;
-        int cx = X(i);
-        int cy = HUM_Y(rh);
-        if (cy < hum_top_y) cy = hum_top_y;
-        if (cy > hum_bot_y) cy = hum_bot_y;
-        char lbl[5]; snprintf(lbl, sizeof(lbl), "%d%%", (int)rh);
-        int lx = cx - 20;
-        if (lx >= 18 && lx + 40 <= w - 18) {
-          DRAW_SHADOWED(lbl, f_medium, GRect(lx, cy + 2, 40, 16),
-                        GTextOverflowModeWordWrap, GTextAlignmentCenter);
-        }
-      }
-    }
+    /* ---- humidity local peak labels removed (available in touch panel) ---- */
 #undef HUM_Y
   }
 
@@ -732,37 +760,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         graphics_draw_line(ctx, GPoint(prev_x, prev_y), GPoint(cx, cy));
       prev_x = cx; prev_y = cy; prev_uv = uv;
     }
-    /* ---- UV daily peak labels (zoomed-in view only) ---- */
-    if (s_zoom_days == 1) {
-      graphics_context_set_text_color(ctx, GColorBlack);
-      int day_max_uv = -1, day_max_rel = -1;
-      for (int i = 0; i <= n; i++) {
-        int abs_i = view_start + i;
-        bool boundary = (i == n) || ((s_local_start_h + abs_i) % 24 == 0);
-        if (boundary && i > 0 && day_max_uv > 0 && day_max_rel >= 0) {
-          int cx = X(day_max_rel);
-          int cy = UV_Y(day_max_uv);
-          if (cy < uv_top) cy = uv_top;
-          if (cy > uv_bot) cy = uv_bot;
-          char lbl[3]; snprintf(lbl, sizeof(lbl), "%d", day_max_uv);
-          int num_w = (day_max_uv >= 10) ? 16 : 8;
-          int uv_lx = cx + 2;
-          int uv_rx = cx + 2 + num_w + 20; /* right edge of "UV" text */
-          if (uv_lx >= 18 && uv_rx <= w - 18) {
-            DRAW_SHADOWED(lbl, f_medium, GRect(cx + 2, cy - 16, 20, 18),
-                          GTextOverflowModeWordWrap, GTextAlignmentLeft);
-            DRAW_SHADOWED("UV", f_tiny, GRect(cx + 2 + num_w, cy - 14, 20, 10),
-                          GTextOverflowModeWordWrap, GTextAlignmentLeft);
-          }
-          day_max_uv = -1; day_max_rel = -1;
-        }
-        if (i == n) break;
-        if (abs_i < s_uv_count) {
-          uint8_t uv = s_uv[abs_i];
-          if (uv != 255 && (int)uv > day_max_uv) { day_max_uv = uv; day_max_rel = i; }
-        }
-      }
-    }
+    /* ---- UV daily peak labels removed (available in touch panel) ---- */
 #undef UV_Y
   }
 
@@ -842,15 +840,13 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   /* ---- sun condition bars + sunrise/sunset ticks ---- */
   if (s_sun_count > 0 && (s_settings.show_golden_hour || s_settings.show_darkness || s_settings.show_dawn_dusk)) {
     const int sun_y    = y_low + 2;   /* top of 2px bar */
-    const int tick_top = sun_y + 1;   /* overlaps bottom row of bar */
-    const int bar_sw = s_zoom_days == 1 ? 2 : 1;
+    const int bar_sw = 2;
     const int bar_y  = sun_y + bar_sw / 2;  /* center of bar for stroke drawing */
     graphics_context_set_stroke_width(ctx, bar_sw);
     for (int i = 0; i < n; i++) {
       int abs_i = view_start + i;
       if (abs_i >= s_sun_count) break;
       uint8_t sc = s_sun_cond[abs_i];
-      if (sc == 0) continue;
 
       /* decode base condition and optional tick */
       uint8_t base = sc;
@@ -859,17 +855,51 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       if (sc >= 160) { base = 1; tick_min = sc - 160; tick_rise = false; }
       else if (sc >= 100) { base = 1; tick_min = sc - 100; tick_rise = true; }
 
-      /* draw bar */
       int bx = X(i);
       int bw = X(i + 1) - bx;
       if (bw < 1) bw = 1;
-      bool draw_full_bar = (base == 2) ? s_settings.show_darkness : s_settings.show_golden_hour;
-      if (draw_full_bar) {
-        GColor bar_color = (base == 2) ? GColorDarkGray : GColorOrange;
+
+      /* determine bar color, and whether this is a golden or dark bar slot */
+      bool is_golden = (base == 1);
+      bool is_dark   = (base == 2);
+
+      /* For sc==0 hours: check if a boundary starts here (partial bar at end of slot) */
+      if (!is_golden && !is_dark && abs_i < s_sun_bmin_count) {
+        uint8_t bv = s_sun_bmin[abs_i];
+        if (bv <= 59)                     { is_golden = true; }
+        else if (bv >= 128 && bv <= 187)  { is_dark   = true; }
+      }
+
+      /* Compute x range within this slot, clipped to minute boundaries */
+      int x_start = bx;
+      int x_end   = bx + bw - 1;
+      if (is_golden || is_dark) {
+        if (abs_i < s_sun_bmin_count) {
+          uint8_t bv = s_sun_bmin[abs_i];
+          if (is_golden && bv <= 59) {
+            /* golden starts partway through this (non-golden) hour */
+            x_start = bx + bw * bv / 60;
+          } else if (is_golden && bv >= 64 && bv <= 123) {
+            /* golden ends partway through this (golden) hour */
+            x_end = bx + bw * (bv - 64) / 60 - 1;
+          } else if (is_dark && bv >= 128 && bv <= 187) {
+            /* dark starts partway through this (non-dark) hour */
+            x_start = bx + bw * (bv - 128) / 60;
+          } else if (is_dark && bv >= 192 && bv <= 251) {
+            /* dark ends partway through this (dark) hour */
+            x_end = bx + bw * (bv - 192) / 60 - 1;
+          }
+        }
+      }
+
+      /* draw bar */
+      bool draw_bar = is_golden ? s_settings.show_golden_hour : (is_dark ? s_settings.show_darkness : false);
+      if (draw_bar && x_end >= x_start) {
+        GColor bar_color = is_dark ? GColorDarkGray : GColorOrange;
         graphics_context_set_stroke_color(ctx, bar_color);
-        graphics_draw_line(ctx, GPoint(bx, bar_y), GPoint(bx + bw - 1, bar_y));
-      } else if (base == 1 && s_settings.show_dawn_dusk && tick_min >= 0) {
-        /* Stub length = tick diagonal = 4√2 ≈ 6px, centered at tick position */
+        graphics_draw_line(ctx, GPoint(x_start, bar_y), GPoint(x_end, bar_y));
+      } else if (base == 1 && !s_settings.show_golden_hour && s_settings.show_dawn_dusk && tick_min >= 0) {
+        /* Stub when show_golden_hour off: short bar around tick position */
         int tx = bx + bw * tick_min / 60;
         graphics_context_set_stroke_color(ctx, GColorOrange);
         graphics_draw_line(ctx, GPoint(tx - 4, bar_y), GPoint(tx + 4, bar_y));
@@ -879,7 +909,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       if (s_settings.show_dawn_dusk && tick_min >= 0) {
         int tx = bx + bw * tick_min / 60;
         graphics_context_set_stroke_color(ctx, GColorOrange);
-        graphics_context_set_stroke_width(ctx, s_zoom_days == 1 ? 2 : 1);
+        graphics_context_set_stroke_width(ctx, 2);
         if (tick_rise) {
           /* "/" sunrise: crosses bar, slopes up left-to-right */
           graphics_draw_line(ctx, GPoint(tx - 2, sun_y + 3), GPoint(tx + 2, sun_y - 1));
@@ -1044,6 +1074,226 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
 #undef Y
 #undef YC
 #undef DRAW_SHADOWED
+
+  /* ---- touch popup ---- */
+  if (s_touch_active && s_temp_count >= 2) {
+    const int abs_i   = s_touch_abs;
+    const int popup_w = 74;                                  /* fits box+value+unit snugly */
+    const int touch_px = (abs_i - view_start) * w / n;
+    const bool popup_left = (touch_px >= w / 2);             /* popup left when touch is right of center */
+    const int px = popup_left ? 0 : (w - popup_w);
+
+    /* White panel */
+    graphics_context_set_fill_color(ctx, GColorWhite);
+    graphics_fill_rect(ctx, GRect(px, TITLE_HEIGHT, popup_w, h - TITLE_HEIGHT), 0, GCornerNone);
+    /* Border on the inner edge */
+    graphics_context_set_stroke_color(ctx, GColorLightGray);
+    graphics_context_set_stroke_width(ctx, 1);
+    int border_x = popup_left ? popup_w : (w - popup_w);
+    graphics_draw_line(ctx, GPoint(border_x, TITLE_HEIGHT), GPoint(border_x, h));
+
+    /* Vertical indicator at touched hour */
+    graphics_context_set_stroke_color(ctx, GColorDarkCandyAppleRed);
+    graphics_context_set_stroke_width(ctx, 1);
+    graphics_draw_line(ctx, GPoint(touch_px, TITLE_HEIGHT), GPoint(touch_px, h));
+
+    /* Content fonts */
+    GFont fp = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
+    GFont ft = fonts_get_system_font(FONT_KEY_GOTHIC_09);   /* units only */
+
+    /* box(6) + gap(2) + value(36) + gap(2) + unit(26) = 72px total from px */
+    const int c_bx = px + 4;
+    const int c_vx = px + 13, c_vw = 36;                   /* left-aligned */
+    const int c_ux = px + 48, c_uw = 24;
+
+    int row = 0;
+    const int row_h = 14;
+
+    /* Header: fixed position just inside the panel */
+    const int hdr_y  = TITLE_HEIGHT + 2;
+    const int sep_y  = hdr_y + row_h + 2;       /* 2px gap below header text */
+    const int y0     = sep_y + 4;               /* data rows start 4px below separator */
+
+#define PROW(val_, unit_, box_color_) do { \
+  int _y = y0 + (row) * row_h; \
+  graphics_context_set_fill_color(ctx, box_color_); \
+  graphics_fill_rect(ctx, GRect(c_bx, _y + (row_h - 6) / 2 + 1, 6, 6), 0, GCornerNone); \
+  graphics_context_set_text_color(ctx, GColorBlack); \
+  graphics_draw_text(ctx, val_, fp, GRect(c_vx, _y - 2, c_vw, row_h), \
+    GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL); \
+  graphics_context_set_text_color(ctx, GColorBlack); \
+  graphics_draw_text(ctx, unit_, ft, GRect(c_ux, _y + 2, c_uw, row_h), \
+    GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL); \
+  row++; \
+} while(0)
+
+    /* Header: weekday + hour */
+    {
+      static const char *pday[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+      int ah  = s_local_start_h + abs_i;
+      int wd  = (s_local_start_wday + ah / 24) % 7;
+      int hod = ah % 24;
+      char hdr[12]; snprintf(hdr, sizeof(hdr), "%s %02d:00", pday[wd], hod);
+      graphics_context_set_text_color(ctx, GColorBlack);
+      graphics_draw_text(ctx, hdr, fp,
+        GRect(px + 3, hdr_y, popup_w - 6, row_h),
+        GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+      /* Separator */
+      graphics_context_set_stroke_color(ctx, GColorLightGray);
+      graphics_context_set_stroke_width(ctx, 1);
+      graphics_draw_line(ctx, GPoint(px + 2, sep_y), GPoint(px + popup_w - 3, sep_y));
+    }
+
+    /* Cloud */
+    if (abs_i < s_cloud_count && s_cloud[abs_i] != 255) {
+      char val[5]; snprintf(val, sizeof(val), "%d", (int)s_cloud[abs_i]);
+      PROW(val, "%", GColorLightGray);
+    }
+    /* Precipitation */
+    if (abs_i < s_precip_count) {
+      int p = (int)s_precip[abs_i];
+      char val[8];
+      const char *unit;
+      if (s_settings.precip_unit == 1) {
+        int hund = p * 254 / 1000;
+        snprintf(val, sizeof(val), "%d.%02d", hund / 100, hund % 100);
+        unit = "in";
+      } else {
+        snprintf(val, sizeof(val), "%d.%d", p / 10, p % 10);
+        unit = "mm";
+      }
+      PROW(val, unit, GColorVividCerulean);
+    }
+    /* Humidity */
+    if (abs_i < s_humidity_count && s_humidity[abs_i] != 255) {
+      char val[5]; snprintf(val, sizeof(val), "%d", (int)s_humidity[abs_i]);
+      PROW(val, "%", GColorCobaltBlue);
+    }
+    /* Temperature */
+    if (abs_i < s_temp_count) {
+      int tv = s_settings.temp_unit
+        ? ((int)s_temps[abs_i] * 9 / 5 + 32) : (int)s_temps[abs_i];
+      char val[6]; snprintf(val, sizeof(val), "%d", tv);
+      PROW(val, s_settings.temp_unit ? "\xc2\xb0""F" : "\xc2\xb0""C", GColorDarkCandyAppleRed);
+    }
+    /* Wind: "spd-gust" range in value column, unit + arrow */
+    if (abs_i < s_wind_count && s_wind_speed[abs_i] != 255) {
+      int spd_disp = prv_wind_conv((int)s_wind_speed[abs_i]);
+      const char *wunit = (s_settings.wind_unit == 1) ? "km/h" :
+                          (s_settings.wind_unit == 2) ? "mph" : "m/s";
+      char val[12];
+      bool has_gust = (abs_i < s_wind_gust_count && s_wind_gust[abs_i] != 255);
+      int gust_disp = has_gust ? prv_wind_conv((int)s_wind_gust[abs_i]) : spd_disp;
+      if (has_gust && gust_disp != spd_disp) {
+        snprintf(val, sizeof(val), "%d-%d", spd_disp, gust_disp);
+      } else {
+        snprintf(val, sizeof(val), "%d", spd_disp);
+      }
+      PROW(val, wunit, GColorClear);   /* box drawn below as arrow */
+      if (s_wind_arrow && abs_i < s_wind_count && s_wind_dir[abs_i] != 255) {
+        int32_t from_deg = (int32_t)s_wind_dir[abs_i] * 360 / 254;
+        int32_t to_deg   = (from_deg + 180) % 360;
+        int arrow_x = c_bx + 3;   /* centre of the box slot */
+        int arrow_y = y0 + (row - 1) * row_h + row_h / 2 + 1;
+        gpath_rotate_to(s_wind_arrow, (int32_t)(TRIG_MAX_ANGLE) * to_deg / 360);
+        gpath_move_to(s_wind_arrow, GPoint(arrow_x, arrow_y));
+        graphics_context_set_fill_color(ctx, GColorDarkGray);
+        gpath_draw_filled(ctx, s_wind_arrow);
+        graphics_context_set_stroke_color(ctx, GColorDarkGray);
+        gpath_draw_outline(ctx, s_wind_arrow);
+      }
+    }
+    /* UV: value + "UVI" unit */
+    if (abs_i < s_uv_count && s_uv[abs_i] != 255) {
+      char val[4]; snprintf(val, sizeof(val), "%d", (int)s_uv[abs_i]);
+      PROW(val, "UVI", GColorOrange);
+    }
+    /* Sun rows — dawn/dusk tick, golden hour range, darkness range */
+    if (abs_i < s_sun_count) {
+      uint8_t sc   = s_sun_cond[abs_i];
+      uint8_t base = (sc >= 100) ? 1 : sc;
+      /* If sc==0 but sun boundary starts during this hour, show that range */
+      bool is_start_boundary = false;
+      if (base == 0 && abs_i < s_sun_bmin_count) {
+        uint8_t bv = s_sun_bmin[abs_i];
+        if (bv <= 59)                    { base = 1; is_start_boundary = true; }
+        else if (bv >= 128 && bv <= 187) { base = 2; is_start_boundary = true; }
+      }
+      /* Precompute range bounds for base condition */
+      int r0 = abs_i, r1 = abs_i;
+      if (base > 0) {
+        if (is_start_boundary) {
+          /* abs_i is the non-golden/dark hour containing the start; first full hour is abs_i+1 */
+          r0 = abs_i + 1;
+          r1 = r0;
+          while (r1+1 < s_sun_count && (((s_sun_cond[r1+1] >= 100) ? 1u : (uint8_t)s_sun_cond[r1+1]) == base)) r1++;
+        } else {
+          r0 = abs_i; r1 = abs_i;
+          while (r0 > 0 && (((s_sun_cond[r0-1] >= 100) ? 1u : (uint8_t)s_sun_cond[r0-1]) == base)) r0--;
+          while (r1+1 < s_sun_count && (((s_sun_cond[r1+1] >= 100) ? 1u : (uint8_t)s_sun_cond[r1+1]) == base)) r1++;
+        }
+      }
+      /* Detect steep-entry: sc>=100 but sunBoundaryMin says golden/dark STARTS this hour,
+         meaning abs_i itself is the entry hour (el0 was outside golden/dark) */
+      bool steep_entry = (sc >= 100 && abs_i < s_sun_bmin_count && s_sun_bmin[abs_i] <= 59 && base == 1);
+      /* Golden hour start / dawn-dusk tick / golden hour end — three rows */
+      if (base == 1) {
+        /* Golden start: in abs_i itself (steep entry) or in the hour before r0 */
+        int bmin_idx = steep_entry ? abs_i : (r0 - 1);
+        int sh, sm = 0;
+        if (bmin_idx >= 0 && bmin_idx < s_sun_bmin_count && s_sun_bmin[bmin_idx] <= 59) {
+          sh = (s_local_start_h + bmin_idx) % 24;
+          sm = s_sun_bmin[bmin_idx];
+        } else {
+          sh = (s_local_start_h + r0) % 24;
+        }
+        char tstart[6]; snprintf(tstart, sizeof(tstart), "%02d:%02d", sh, sm);
+        PROW(tstart, "gold>", GColorOrange);
+      }
+      if (sc >= 100) {
+        int tick_min = (sc < 160) ? (sc - 100) : (sc - 160);
+        bool is_rise = (sc < 160);
+        int tick_h   = (s_local_start_h + abs_i) % 24;
+        char tval[6]; snprintf(tval, sizeof(tval), "%02d:%02d", tick_h, tick_min);
+        PROW(tval, is_rise ? "rise" : "set", GColorOrange);
+      }
+      if (base == 1) {
+        int eh = (s_local_start_h + r1) % 24, em = 0;
+        if (r1 < s_sun_bmin_count && s_sun_bmin[r1] >= 64 && s_sun_bmin[r1] <= 123) {
+          em = s_sun_bmin[r1] - 64;
+        } else {
+          eh = (s_local_start_h + r1 + 1) % 24;
+        }
+        char tend[6]; snprintf(tend, sizeof(tend), "%02d:%02d", eh, em);
+        PROW(tend, "<gold", GColorOrange);
+      }
+      /* Darkness: show start and end on separate rows */
+      if (base == 2) {
+        /* Darkness start is in the hour BEFORE r0 (el crosses into dark there) */
+        int sbmin_idx = r0 - 1;
+        int sh, sm = 0;
+        if (sbmin_idx >= 0 && sbmin_idx < s_sun_bmin_count &&
+            s_sun_bmin[sbmin_idx] >= 128 && s_sun_bmin[sbmin_idx] <= 187) {
+          sh = (s_local_start_h + sbmin_idx) % 24;
+          sm = s_sun_bmin[sbmin_idx] - 128;
+        } else {
+          sh = (s_local_start_h + r0) % 24;
+        }
+        int eh = (s_local_start_h + r1) % 24, em = 0;
+        if (r1 < s_sun_bmin_count && s_sun_bmin[r1] >= 192 && s_sun_bmin[r1] <= 251) {
+          em = s_sun_bmin[r1] - 192;
+        } else {
+          eh = (s_local_start_h + r1 + 1) % 24;
+        }
+        char tstart[6]; snprintf(tstart, sizeof(tstart), "%02d:%02d", sh, sm);
+        char tend[6];   snprintf(tend,   sizeof(tend),   "%02d:%02d", eh, em);
+        PROW(tstart, "dark>", GColorDarkGray);
+        PROW(tend,   "<dark", GColorDarkGray);
+      }
+    }
+
+#undef PROW
+  }
 
   /* ---- title bar (redrawn on top to cover any graph overflow) ---- */
   graphics_context_set_fill_color(ctx, GColorWhite);
@@ -1236,6 +1486,8 @@ static void prv_window_load(Window *window) {
   static const GPoint arrow_pts[] = {{0, -5}, {-3, 3}, {3, 3}};
   static const GPathInfo arrow_info = {3, (GPoint *)arrow_pts};
   s_wind_arrow = gpath_create(&arrow_info);
+
+  touch_service_subscribe(prv_touch_handler, NULL);
 }
 
 static void prv_window_unload(Window *window) {
@@ -1249,6 +1501,7 @@ static void prv_window_unload(Window *window) {
     animation_destroy(s_scroll_anim);
     s_scroll_anim = NULL;
   }
+  touch_service_unsubscribe();
   gpath_destroy(s_wind_arrow);
   s_wind_arrow = NULL;
   layer_destroy(s_graph_layer);

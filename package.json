@@ -18,10 +18,6 @@
     "sdkVersion": "3",
     "enableMultiJS": true,
     "targetPlatforms": [
-      "aplite",
-      "basalt",
-      "chalk",
-      "diorite",
       "emery"
     ],
     "watchapp": {
@@ -48,6 +44,7 @@
       "WIND_UNIT",
       "PRECIP_UNIT",
       "SUN_CONDITION",
+      "SUN_BOUNDARY_MIN",
       "UV_INDEX",
       "RELATIVE_HUMIDITY",
       "SHOW_CLOUD",
