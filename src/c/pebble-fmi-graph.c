@@ -1458,6 +1458,19 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         int tick_h   = (s_local_start_h + abs_i) % 24;
         char tval[8]; prv_fmt_hhmm(tval, sizeof(tval), tick_h, tick_min);
         PROW(tval, is_rise ? "rise" : "set", GColorOrange);
+      } else if (base == 1) {
+        /* Scan golden range for the tick hour and show it */
+        for (int ri = r0; ri <= r1; ri++) {
+          if (ri < s_sun_count && s_sun_cond[ri] >= 100) {
+            uint8_t rsc = s_sun_cond[ri];
+            int tick_min = (rsc < 160) ? (rsc - 100) : (rsc - 160);
+            bool is_rise = (rsc < 160);
+            int tick_h   = (s_local_start_h + ri) % 24;
+            char tval[8]; prv_fmt_hhmm(tval, sizeof(tval), tick_h, tick_min);
+            PROW(tval, is_rise ? "rise" : "set", GColorOrange);
+            break;
+          }
+        }
       }
       if (base == 1) {
         int eh = (s_local_start_h + r1) % 24, em = 0;
