@@ -1246,6 +1246,9 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         int abs_i = s_day_min_abs[d];
         if (abs_i < 0 || abs_i < view_start || abs_i >= view_start + n) goto skip_min;
         int lbl_y = YC(TC(s_day_min_val[d])) + 2;
+        /* Keep label above the time axis tick labels */
+        const int min_lbl_y_max = gb - TLABEL_HEIGHT - 14;
+        if (lbl_y > min_lbl_y_max) lbl_y = min_lbl_y_max;
         int lx = X(abs_i - view_start) - lbl_w / 2;
         if (lx < day_x0) lx = day_x0;
         if (lx + lbl_w > day_x1) lx = day_x1 - lbl_w;
