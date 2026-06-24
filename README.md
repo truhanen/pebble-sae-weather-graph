@@ -1,35 +1,25 @@
-# pebble-fmi-graph
+# Sää Weather Graph
 
-A Pebble watchapp written in C using the Pebble SDK.
+Pebble watch app for viewing weather forecasts as a scrollable graph.
 
-## Building & running
+![screenshot](screenshots/screenshot_01.gif)
 
-```sh
-make build
-make start_emulator
-make install_emulator
-make shutdown_emulator
-make clean
-```
+### Makefile
 
-## Target platforms
+The project uses _Makefile_ to define common build routines.
 
-`targetPlatforms` in `package.json` controls which watches you build for. The
-modern Pebble hardware is **emery** (Pebble Time 2), **gabbro** (Pebble Round
-2), and **flint** (Pebble 2 Duo); the original Pebble platforms (aplite,
-basalt, chalk, diorite) are included by default for backwards compatibility.
+### Weather data
 
-## Project layout
+Weather data is fetched from the Finnish Meteorological Institute's (FMI) open
+data service for locations in Scandinavia, with
+[Open-Meteo](https://open-meteo.com) as a fallback for other locations.
 
-```
-src/c/           C source for the watchapp
-src/pkjs/        PebbleKit JS (phone-side) source, if any
-worker_src/c/    Background worker source, if any
-resources/       Images, fonts, and other bundled resources
-package.json     Project metadata (UUID, platforms, resources, message keys)
-wscript          Build rules — usually no need to edit
-```
+Displayed data includes temperature, precipitation, wind speed and direction,
+cloud cover, UV index, relative humidity, and sun conditions (golden hour,
+darkness, sunrise/sunset ticks).
 
-## Documentation
+### Configuration
 
-Full SDK docs, tutorials, and API reference: <https://developer.repebble.com>
+The app is configurable via the Pebble phone app. Settings include displayed
+data layers per zoom level, units, date/time format, and up to five preset
+locations.
