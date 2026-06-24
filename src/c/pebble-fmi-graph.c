@@ -499,6 +499,27 @@ static void prv_touch_handler(const TouchEvent *event, void *ctx) {
 
 #define SHOW(f) (s_zoom_days == 1 ? s_settings.show_##f##_z1 : s_settings.show_##f##_z5)
 
+/* Returns a "nice" step for a scale with ≤ max_ticks intervals and step ≥ min_step.
+   Steps follow the 1–2–5 × 10^n sequence.
+   Sets *scale_max to ceil(max_val / step) * step. */
+static int prv_nice_scale(int max_val, int max_ticks, int min_step, int *scale_max) {
+  if (max_val < 1) max_val = 1;
+  int raw = (max_val + max_ticks - 1) / max_ticks;
+  if (raw < min_step) raw = min_step;
+  /* Round raw up to nearest 1–2–5 × 10^n */
+  int mag = 1;
+  while (mag * 10 <= raw) mag *= 10;
+  int n = (raw + mag - 1) / mag;  /* ceil(raw / mag), result in [1..10] */
+  int nice;
+  if      (n <= 1) nice = 1;
+  else if (n <= 2) nice = 2;
+  else if (n <= 5) nice = 5;
+  else           { nice = 1; mag *= 10; }
+  int step = nice * mag;
+  *scale_max = ((max_val + step - 1) / step) * step;
+  return step;
+}
+
 static void prv_graph_update(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   const int w  = bounds.size.w;
@@ -661,17 +682,18 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       if (p > precip_max_p) precip_max_p = p;
     }
   }
-  /* Snap to fixed scale ceilings */
-  int inch_tick_hund = 0;  /* tick step in hundredths-of-inch (0 = mm mode) */
+  /* Apply nice scale to precip */
+  int inch_tick_hund = 0;    /* tick step in hundredths-of-inch (0 = mm mode) */
+  int precip_tick_step = 0;  /* tick step in tenths-of-mm (mm mode only) */
   if (s_settings.precip_unit == 1) {
-    /* Inch ceilings: 0.10in / 0.40in / 0.60in  (≈ mm 3/10/15) */
-    if      (precip_max_p <= 25)  { precip_max_p =  25; inch_tick_hund =  5; }
-    else if (precip_max_p <= 101) { precip_max_p = 101; inch_tick_hund = 10; }
-    else                          { precip_max_p = 152; inch_tick_hund = 20; }
+    /* Inch: work in hundredths-of-inch */
+    int max_hund = (precip_max_p * 100 + 253) / 254;
+    int scale_hund;
+    inch_tick_hund = prv_nice_scale(max_hund, 4, 5, &scale_hund);
+    precip_max_p = (scale_hund * 254 + 99) / 100;
   } else {
-    if      (precip_max_p <= 40)  precip_max_p = 30;
-    else if (precip_max_p <= 100) precip_max_p = 100;
-    else                          precip_max_p = 150;
+    /* mm: work in tenths-of-mm, min step = 10 tenths (= 1 mm) */
+    precip_tick_step = prv_nice_scale(precip_max_p, 4, 10, &precip_max_p);
   }
 
   /* ---- precipitation axis ticks (lines only, labels drawn later on top) ---- */
@@ -687,8 +709,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         graphics_draw_line(ctx, GPoint(w - 13, by), GPoint(w, by));
       }
     } else {
-      int tick_step = (precip_max_p <= 100) ? 10 : 30;
-      for (int p = tick_step; p <= precip_max_p; p += tick_step) {
+      for (int p = precip_tick_step; p <= precip_max_p; p += precip_tick_step) {
         int by = precip_top + p * precip_max_bar_h / precip_max_p;
         if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
         graphics_draw_line(ctx, GPoint(w - 13, by), GPoint(w, by));
@@ -813,10 +834,10 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         wind_max_spd_ms = s_wind_gust[i];
     }
     wind_max_spd_ms = ((wind_max_spd_ms + 4) / 5) * 5;
-    wind_step = (s_settings.wind_unit == 1) ? 20 :
-                (s_settings.wind_unit == 2) ? 20 : 5;
+    int wind_min_step = (s_settings.wind_unit == 1) ? 20 :
+                        (s_settings.wind_unit == 2) ? 10 : 5;
     wind_max_disp = prv_wind_conv(wind_max_spd_ms);
-    wind_max_disp = ((wind_max_disp + wind_step - 1) / wind_step) * wind_step;
+    wind_step = prv_nice_scale(wind_max_disp, 4, wind_min_step, &wind_max_disp);
     const int wind_top = wind_top_y;
     const int wind_bot = y_low;
     const int wind_h   = wind_bot - wind_top;
@@ -997,20 +1018,14 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
                       GTextOverflowModeWordWrap, GTextAlignmentRight);
       }
     } else {
-      int tick_step = (precip_max_p > 100) ? 30 : 10;
-      for (int p = tick_step; p <= precip_max_p; p += tick_step) {
+      for (int p = precip_tick_step; p <= precip_max_p; p += precip_tick_step) {
         int by = precip_top + p * precip_max_bar_h / precip_max_p;
         if (by < precip_top || by > precip_top + precip_max_bar_h) continue;
         if (mm_bot_by < 0 || by > mm_bot_by) mm_bot_by = by;
         if (mm_top_by < 0 || by < mm_top_by) mm_top_by = by;
-        bool show_lbl = (precip_max_p <= 30)  ? (p % 10 == 0)
-                      : (precip_max_p <= 100) ? (p % 20 == 0)
-                      : (p % 30 == 0);
-        if (show_lbl) {
-          char lbl[6]; snprintf(lbl, sizeof(lbl), "%d", p / 10);
-          DRAW_SHADOWED(lbl, f_medium, GRect(w - 30, by - 16, 28, 18),
-                        GTextOverflowModeWordWrap, GTextAlignmentRight);
-        }
+        char lbl[6]; snprintf(lbl, sizeof(lbl), "%d", p / 10);
+        DRAW_SHADOWED(lbl, f_medium, GRect(w - 30, by - 16, 28, 18),
+                      GTextOverflowModeWordWrap, GTextAlignmentRight);
       }
     }
     if (mm_bot_by >= 0) {
