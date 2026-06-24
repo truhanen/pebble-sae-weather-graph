@@ -43,11 +43,11 @@ clean:
 	pebble clean
 
 # Take screenshots and generate GIFs for the app store page
-.PHONY: screenshots
-screenshots:
+.PHONY: create_screenshots
+create_screenshots:
 	bash scripts/create_screenshots.sh
 
 # Generate app icon (resources/launcher_icon.png)
-.PHONY: icon
-icon:
+.PHONY: create_icon
+create_icon:
 	python3 scripts/generate_icon.py
