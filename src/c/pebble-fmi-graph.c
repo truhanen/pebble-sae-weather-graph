@@ -25,8 +25,8 @@ typedef struct {
   uint8_t show_wind_z5;
   uint8_t show_uv_z1;
   uint8_t show_uv_z5;
-  uint8_t show_dawn_dusk_z1;
-  uint8_t show_dawn_dusk_z5;
+  uint8_t show_sunrise_sunset_z1;
+  uint8_t show_sunrise_sunset_z5;
   uint8_t show_golden_hour_z1;
   uint8_t show_golden_hour_z5;
   uint8_t show_darkness_z1;
@@ -45,7 +45,7 @@ static AppSettings s_settings = {
   .show_humidity_z1 = 1, .show_humidity_z5 = 1,
   .show_wind_z1 = 1, .show_wind_z5 = 1,
   .show_uv_z1 = 1, .show_uv_z5 = 1,
-  .show_dawn_dusk_z1 = 1, .show_dawn_dusk_z5 = 1,
+  .show_sunrise_sunset_z1 = 1, .show_sunrise_sunset_z5 = 1,
   .show_golden_hour_z1 = 1, .show_golden_hour_z5 = 1,
   .show_darkness_z1 = 1, .show_darkness_z5 = 1,
   .time_format = 0, .date_format = 0,
@@ -235,8 +235,8 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
   HANDLE_TOGGLE(SHOW_WIND_Z5,         show_wind_z5);
   HANDLE_TOGGLE(SHOW_UV_Z1,           show_uv_z1);
   HANDLE_TOGGLE(SHOW_UV_Z5,           show_uv_z5);
-  HANDLE_TOGGLE(SHOW_DAWN_DUSK_Z1,    show_dawn_dusk_z1);
-  HANDLE_TOGGLE(SHOW_DAWN_DUSK_Z5,    show_dawn_dusk_z5);
+  HANDLE_TOGGLE(SHOW_SUNRISE_SUNSET_Z1,    show_sunrise_sunset_z1);
+  HANDLE_TOGGLE(SHOW_SUNRISE_SUNSET_Z5,    show_sunrise_sunset_z5);
   HANDLE_TOGGLE(SHOW_GOLDEN_HOUR_Z1,  show_golden_hour_z1);
   HANDLE_TOGGLE(SHOW_GOLDEN_HOUR_Z5,  show_golden_hour_z5);
   HANDLE_TOGGLE(SHOW_DARKNESS_Z1,     show_darkness_z1);
@@ -571,7 +571,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   if (g_high == g_low) g_high = g_low + t_step;  /* guard against flat data */
   /* Fix pixel positions: g_low just above weekday labels, g_high with room for top label */
   bool sun_visible = s_sun_count > 0 &&
-    (SHOW(dawn_dusk) || SHOW(golden_hour) || SHOW(darkness));
+    (SHOW(sunrise_sunset) || SHOW(golden_hour) || SHOW(darkness));
   const int y_low  = gb - 3 - TLABEL_HEIGHT - (sun_visible ? 8 : 0);
   const int y_high = gt + 18;                      /* room for f_medium label + gap */
 
@@ -932,7 +932,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
   }
 
   /* ---- sun condition bars + sunrise/sunset ticks ---- */
-  if (s_sun_count > 0 && (SHOW(golden_hour) || SHOW(darkness) || SHOW(dawn_dusk))) {
+  if (s_sun_count > 0 && (SHOW(golden_hour) || SHOW(darkness) || SHOW(sunrise_sunset))) {
     const int sun_y    = y_low + 2;   /* top of 2px bar */
     const int bar_sw = 2;
     const int bar_y  = sun_y + bar_sw / 2;  /* center of bar for stroke drawing */
@@ -992,7 +992,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
         GColor bar_color = is_dark ? GColorDarkGray : GColorOrange;
         graphics_context_set_stroke_color(ctx, bar_color);
         graphics_draw_line(ctx, GPoint(x_start, bar_y), GPoint(x_end, bar_y));
-      } else if (base == 1 && !SHOW(golden_hour) && SHOW(dawn_dusk) && tick_min >= 0) {
+      } else if (base == 1 && !SHOW(golden_hour) && SHOW(sunrise_sunset) && tick_min >= 0) {
         /* Stub when show_golden_hour off: short bar around tick position */
         int tx = bx + bw * tick_min / 60;
         graphics_context_set_stroke_color(ctx, GColorOrange);
@@ -1000,7 +1000,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       }
 
       /* draw tick */
-      if (SHOW(dawn_dusk) && tick_min >= 0) {
+      if (SHOW(sunrise_sunset) && tick_min >= 0) {
         int tx = bx + bw * tick_min / 60;
         graphics_context_set_stroke_color(ctx, GColorOrange);
         graphics_context_set_stroke_width(ctx, 2);
@@ -1303,7 +1303,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       char val[4]; snprintf(val, sizeof(val), "%d", (int)s_uv[abs_i]);
       PROW(val, "UVI", GColorOrange);
     }
-    /* Sun rows — dawn/dusk tick, golden hour range, darkness range */
+    /* Sun rows — sunrise/sunset tick, golden hour range, darkness range */
     if (abs_i < s_sun_count) {
       uint8_t sc   = s_sun_cond[abs_i];
       uint8_t base = (sc >= 100) ? 1 : sc;
@@ -1331,7 +1331,7 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
       /* Detect steep-entry: sc>=100 but sunBoundaryMin says golden/dark STARTS this hour,
          meaning abs_i itself is the entry hour (el0 was outside golden/dark) */
       bool steep_entry = (sc >= 100 && abs_i < s_sun_bmin_count && s_sun_bmin[abs_i] <= 59 && base == 1);
-      /* Golden hour start / dawn-dusk tick / golden hour end — three rows */
+      /* Golden hour start / sunrise-sunset tick / golden hour end — three rows */
       if (base == 1) {
         /* Golden start: in abs_i itself (steep entry) or in the hour before r0 */
         int bmin_idx = steep_entry ? abs_i : (r0 - 1);

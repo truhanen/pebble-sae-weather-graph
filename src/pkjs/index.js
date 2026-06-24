@@ -37,7 +37,7 @@ var clay = new Clay(clayConfig, function() {
       ['SHOW_UV_Z1',           'SHOW_UV_Z5',           'UV index'],
       ['SHOW_GOLDEN_HOUR_Z1',  'SHOW_GOLDEN_HOUR_Z5',  'Golden hour'],
       ['SHOW_DARKNESS_Z1',     'SHOW_DARKNESS_Z5',     'Darkness'],
-      ['SHOW_DAWN_DUSK_Z1',    'SHOW_DAWN_DUSK_Z5',    'Dawn & dusk ticks']
+      ['SHOW_SUNRISE_SUNSET_Z1',    'SHOW_SUNRISE_SUNSET_Z5',    'Sunrise & sunset ticks']
     ];
 
     pairs.forEach(function(p) {
@@ -206,22 +206,26 @@ function elToSunCond(el) {
 
 /* Returns 0/1/2 for normal/golden/dark, or 100+min for sunrise golden,
    160+min for sunset golden (min = 0-59 within the hour).
-   Also handles steep-rise/set case where el enters golden AND crosses 0° in the same hour. */
+   Sunrise/sunset defined as upper limb crossing the horizon:
+   solar center at -0.833° (= -0.267° radius + -0.567° refraction).
+   Also handles steep-rise/set case where el enters golden AND crosses the
+   horizon in the same hour. */
 function sunConditionWithTick(lat, lon, startMs, i) {
   var el0 = solarElevationDeg(lat, lon, new Date(startMs + i * 3600000));
   var el1 = solarElevationDeg(lat, lon, new Date(startMs + (i + 1) * 3600000));
   var cond = elToSunCond(el0);
+  var HORIZON = -0.833;  /* upper limb correction */
   function crossMin(thr) {
     return Math.max(0, Math.min(59, Math.round((thr - el0) / (el1 - el0) * 60)));
   }
   if (cond === 1) {
-    /* el0 already in golden range: check for 0° crossing */
-    if (el0 < 0 && el1 >= 0) return 100 + crossMin(0);  /* sunrise */
-    if (el0 >= 0 && el1 < 0) return 160 + crossMin(0);  /* sunset  */
+    /* el0 already in golden range: check for horizon crossing */
+    if (el0 < HORIZON && el1 >= HORIZON) return 100 + crossMin(HORIZON);  /* sunrise */
+    if (el0 >= HORIZON && el1 < HORIZON) return 160 + crossMin(HORIZON);  /* sunset  */
   } else {
-    /* el0 outside golden: check if el enters golden AND crosses 0° this hour */
-    if (el0 < -4 && el1 >= -4 && el1 > 0) return 100 + crossMin(0);  /* steep sunrise */
-    if (el0 > 6  && el1 <= 6  && el1 < 0) return 160 + crossMin(0);  /* steep sunset  */
+    /* el0 outside golden: check if el enters golden AND crosses horizon this hour */
+    if (el0 < -4 && el1 >= -4 && el1 > HORIZON) return 100 + crossMin(HORIZON);  /* steep sunrise */
+    if (el0 > 6  && el1 <= 6  && el1 < HORIZON) return 160 + crossMin(HORIZON);  /* steep sunset  */
   }
   return cond;
 }
