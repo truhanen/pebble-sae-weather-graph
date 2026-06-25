@@ -108,6 +108,44 @@ var clay = new Clay(clayConfig, function() {
       /* Hide Z5 row (its checkbox was moved; the row is now empty) */
       el5.style.display = 'none';
     });
+
+    /* Fix the Save button to the bottom of the viewport */
+    var submitEl = document.querySelector('.submit-button, [type="submit"], .component-submit');
+    if (!submitEl) {
+      var allBtns = document.querySelectorAll('button, input[type="submit"]');
+      for (var bi = 0; bi < allBtns.length; bi++) {
+        var txt = allBtns[bi].textContent || allBtns[bi].value || '';
+        if (txt.trim().toLowerCase() === 'save') { submitEl = allBtns[bi]; break; }
+      }
+    }
+    if (submitEl) {
+      var submitWrapper = submitEl;
+      while (submitWrapper && submitWrapper.tagName !== 'LI' && submitWrapper.tagName !== 'BODY') {
+        submitWrapper = submitWrapper.parentNode;
+      }
+      var fixedEl = (submitWrapper && submitWrapper.tagName === 'LI') ? submitWrapper : submitEl;
+      /* Remove from normal flow */
+      var scrollContainer = fixedEl.parentNode;
+      if (scrollContainer) scrollContainer.removeChild(fixedEl);
+      fixedEl.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:1000;' +
+        'margin:0;border-top:1px solid #333;';
+      document.body.appendChild(fixedEl);
+      /* Measure button height after insertion, then constrain the scroll container */
+      setTimeout(function() {
+        var btnH = fixedEl.offsetHeight || 56;
+        var bg = (scrollContainer && window.getComputedStyle(scrollContainer).backgroundColor) ||
+                 window.getComputedStyle(document.body).backgroundColor ||
+                 '#1c1c1c';
+        fixedEl.style.background = bg;
+        document.body.style.cssText += 'margin:0;padding:0;overflow:hidden;height:100vh;';
+        document.documentElement.style.cssText += 'overflow:hidden;height:100vh;';
+        if (scrollContainer) {
+          scrollContainer.style.cssText += 'overflow-y:auto;' +
+            'height:calc(100vh - ' + btnH + 'px);' +
+            'box-sizing:border-box;display:block;';
+        }
+      }, 0);
+    }
   });
 
   function addGeoAutocomplete(input) {
