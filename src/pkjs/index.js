@@ -6,6 +6,11 @@ var clay = new Clay(clayConfig, function() {
   var clayConfig = this;
 
   clayConfig.on(clayConfig.EVENTS.AFTER_BUILD, function() {
+    /* Section heading left padding */
+    var style = document.createElement('style');
+    style.textContent = '.component-heading { padding-left: 8px; }';
+    document.head.appendChild(style);
+
     /* Autocomplete + single-line layout for preset location inputs */
     for (var i = 1; i <= 5; i++) {
       var item = clayConfig.getItemByMessageKey('PRESET_NAME_' + i);
@@ -124,19 +129,15 @@ var clay = new Clay(clayConfig, function() {
         submitWrapper = submitWrapper.parentNode;
       }
       var fixedEl = (submitWrapper && submitWrapper.tagName === 'LI') ? submitWrapper : submitEl;
-      /* Remove from normal flow */
       var scrollContainer = fixedEl.parentNode;
-      if (scrollContainer) scrollContainer.removeChild(fixedEl);
-      fixedEl.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:1000;' +
-        'margin:0;border-top:1px solid #333;';
-      document.body.appendChild(fixedEl);
-      /* Measure button height after insertion, then constrain the scroll container */
+      /* Fix the button to the bottom IN PLACE (keep inside the form so submission still works) */
       setTimeout(function() {
-        var btnH = fixedEl.offsetHeight || 56;
         var bg = (scrollContainer && window.getComputedStyle(scrollContainer).backgroundColor) ||
                  window.getComputedStyle(document.body).backgroundColor ||
                  '#1c1c1c';
-        fixedEl.style.background = bg;
+        fixedEl.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:1000;' +
+          'margin:0;border-top:1px solid #333;background:' + bg + ';';
+        var btnH = fixedEl.offsetHeight || 56;
         document.body.style.cssText += 'margin:0;padding:0;overflow:hidden;height:100vh;';
         document.documentElement.style.cssText += 'overflow:hidden;height:100vh;';
         if (scrollContainer) {
