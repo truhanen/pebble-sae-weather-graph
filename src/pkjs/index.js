@@ -19,7 +19,7 @@ var clay = new Clay(clayConfig, function() {
       /* Inline-override the block layout to make label+field one row */
       var lbl = item.$element[0].querySelector('label.tap-highlight');
       if (lbl) {
-        lbl.style.cssText = 'display:flex;align-items:center;padding:8px 16px;';
+        lbl.style.cssText = 'display:flex;align-items:center;padding:8px 12px;';
         var labelSpan = lbl.querySelector('.label');
         if (labelSpan) {
           labelSpan.style.cssText = 'flex-shrink:0;padding:0;margin-right:10px;white-space:nowrap;';
@@ -38,7 +38,7 @@ var clay = new Clay(clayConfig, function() {
     if (cacheItem) {
       var cacheLbl = cacheItem.$element[0].querySelector('label.tap-highlight');
       if (cacheLbl) {
-        cacheLbl.style.cssText = 'display:flex;align-items:center;padding:8px 16px;';
+        cacheLbl.style.cssText = 'display:flex;align-items:center;padding:8px 12px;';
         var cacheLabelSpan = cacheLbl.querySelector('.label');
         if (cacheLabelSpan) {
           cacheLabelSpan.style.cssText = 'flex-shrink:0;padding:0;margin-right:10px;white-space:nowrap;';
@@ -80,7 +80,7 @@ var clay = new Clay(clayConfig, function() {
       /* Replace the outer <label> with a <div> to prevent auto-toggle-on-click */
       var tapHL = el1.querySelector('.tap-highlight');
       var rowDiv = document.createElement('div');
-      rowDiv.style.cssText = 'display:flex;align-items:center;padding:10px 16px;box-sizing:border-box;';
+      rowDiv.style.cssText = 'display:flex;align-items:center;padding:10px 12px;box-sizing:border-box;';
       /* Discard existing children — we'll build fresh */
       tapHL.parentNode.replaceChild(rowDiv, tapHL);
 
