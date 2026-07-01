@@ -1018,10 +1018,12 @@ static void prv_graph_update(Layer *layer, GContext *ctx) {
           /* Range lines, leaving a gap around the icon */
           int lx0 = X(run_start);
           int lx1 = X(run_end);
+          graphics_context_set_stroke_width(ctx, 2);
           if (cx - icon_r - 2 > lx0)
             graphics_draw_line(ctx, GPoint(lx0, iy), GPoint(cx - icon_r - 2, iy));
           if (cx + icon_r + 2 < lx1)
             graphics_draw_line(ctx, GPoint(cx + icon_r + 2, iy), GPoint(lx1 - 1, iy));
+          graphics_context_set_stroke_width(ctx, 1);
 
           if (run_type == 1) {
             /* Snowflake: 4 crossed lines (horizontal, vertical, two diagonals) */
