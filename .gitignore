@@ -2,6 +2,7 @@ tmp
 build
 .idea
 .lock-waf_darwin_build
+.lock-waf_linux_build
 node_modules
 screenshots/raw_png
 resources/launcher_icon_preview.png

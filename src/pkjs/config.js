@@ -221,6 +221,19 @@ module.exports = [
     ]
   },
   {
+    "type": "select",
+    "messageKey": "IDLE_EXIT_SEC",
+    "defaultValue": 15,
+    "label": "Return to watchface when idle",
+    "options": [
+      { "label": "Off", "value": 0 },
+      { "label": "10 s", "value": 10 },
+      { "label": "15 s", "value": 15 },
+      { "label": "30 s", "value": 30 },
+      { "label": "60 s", "value": 60 }
+    ]
+  },
+  {
     "type": "input",
     "messageKey": "CACHE_MAX_AGE_HOURS",
     "defaultValue": "24",

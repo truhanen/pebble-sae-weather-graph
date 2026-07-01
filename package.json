@@ -1,7 +1,7 @@
 {
   "name": "pebble-sae-weather-graph",
   "author": "Tuukka Ruhanen",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "keywords": [
     "weather",
     "graph"
@@ -75,7 +75,8 @@
       "PRESET_NAME_5",
       "SELECTED_PRESET",
       "CACHE_MAX_AGE_HOURS",
-      "STARTUP_VIEW"
+      "STARTUP_VIEW",
+      "IDLE_EXIT_SEC"
     ],
     "resources": {
       "media": [
