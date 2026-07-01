@@ -41,6 +41,7 @@ typedef struct {
 
 #define SETTINGS_VERSION 7
 #define LAST_VIEW_KEY 90  /* persist last zoom state (outside cache key range) */
+#define IDLE_EXIT_KEY 91  /* idle auto-exit seconds (outside cache key range) */
 
 static AppSettings s_settings = {
   .version = SETTINGS_VERSION,
@@ -161,6 +162,50 @@ static int prv_load_last_view(void) {
   }
   return 5;  /* default to 5-day if not set */
 }
+
+/* ---------- idle auto-exit ----------
+   After s_idle_timeout_sec of no interaction in the graph / location views, return
+   to the watchface (same idiom as a confirmed action). 0 = feature off; default 15. */
+
+static int       s_idle_timeout_sec = 15;   /* 0 = off */
+static AppTimer *s_idle_timer       = NULL;
+static bool      s_config_open      = false; /* true while the phone config page is open (pauses idle) */
+
+static void idle_cancel(void) {
+  if (s_idle_timer) { app_timer_cancel(s_idle_timer); s_idle_timer = NULL; }
+}
+
+static void idle_fire(void *ctx) {
+  (void)ctx;
+  s_idle_timer = NULL;
+  exit_reason_set(APP_EXIT_ACTION_PERFORMED_SUCCESSFULLY);
+  window_stack_pop_all(true);  /* lands on the watchface */
+}
+
+static void idle_reset(void) {  /* arm or reschedule */
+  if (s_config_open) return;    /* never (re)arm while the phone config page is open */
+  if (s_idle_timeout_sec <= 0) { idle_cancel(); return; }
+  if (s_idle_timer) app_timer_reschedule(s_idle_timer, s_idle_timeout_sec * 1000);
+  else              s_idle_timer = app_timer_register(s_idle_timeout_sec * 1000, idle_fire, NULL);
+}
+
+/* Type-tolerant seconds reader: default Clay auto-send delivers a select as a
+   string. Hand-rolled digit loop — never atoi/strtol (not exported by Core fw). */
+static int idle_read_seconds(Tuple *t) {
+  if (!t) return -1;  /* key absent -> leave unchanged */
+  if (t->type == TUPLE_CSTRING) {
+    int v = 0; const char *p = t->value->cstring;
+    while (*p >= '0' && *p <= '9') v = v * 10 + (*p++ - '0');
+    return v;
+  }
+  return (int)t->value->int32;
+}
+
+/* Window handlers shared by both windows: arm on show, cancel on hide.
+   A child window (location menu) pushing over the graph makes it disappear,
+   which cancels the timer for free; the child arms its own. */
+static void prv_idle_appear(Window *window)    { (void)window; idle_reset(); }
+static void prv_idle_disappear(Window *window) { (void)window; idle_cancel(); }
 
 /* ---------- data processing ---------- */
 
@@ -429,6 +474,24 @@ static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
     }
   }
 
+  /* Idle auto-exit seconds (0 = off) */
+  int idle_sec = idle_read_seconds(dict_find(iter, MESSAGE_KEY_IDLE_EXIT_SEC));
+  if (idle_sec >= 0) {
+    s_idle_timeout_sec = idle_sec;
+    persist_write_int(IDLE_EXIT_KEY, idle_sec);
+    idle_reset();  /* apply new timeout immediately (or cancel if 0) */
+  }
+
+  /* Pause the idle auto-exit while the phone config page is open (no watch buttons
+     are pressed during config, so the idle timer would otherwise fire and kill the
+     app -- and PKJS with it -- closing the config page and losing unsaved changes). */
+  Tuple *co = dict_find(iter, MESSAGE_KEY_CFG_OPEN);
+  if (co) {
+    s_config_open = (co->value->int32 != 0);
+    if (s_config_open) idle_cancel();   /* pause while phone config is open */
+    else               idle_reset();    /* resume when config closes */
+  }
+
   /* Preset location names from JS */
   {
     uint32_t preset_keys[5] = {
@@ -630,6 +693,7 @@ static void prv_fmt_hdr(char *buf, int sz, const char *day, int h24) {
 }
 
 static void prv_touch_handler(const TouchEvent *event, void *ctx) {
+  idle_reset();  /* touching/dragging the graph is active use */
   if (s_status != STATUS_READY || s_temp_count < 2) return;
 
   GRect bounds = layer_get_bounds(s_graph_layer);
@@ -1823,6 +1887,7 @@ static void prv_start_zoom_anim(int vc_target) {
 /* ---------- click handlers ---------- */
 
 static void prv_select_click(ClickRecognizerRef r, void *ctx) {
+  idle_reset();
   s_zoom_days = (s_zoom_days == 1) ? 5 : 1;
   int vc_target = s_zoom_days * 24;
   /* Fix the data index at 1/4 screen width */
@@ -1831,6 +1896,7 @@ static void prv_select_click(ClickRecognizerRef r, void *ctx) {
 }
 
 static void prv_down_click(ClickRecognizerRef r, void *ctx) {
+  idle_reset();
   int step = (s_zoom_days == 1) ? 6 : 24;
   int view_count = (s_zoom_days == 1) ? 24 : (s_zoom_days * 24);
   int max_scroll = s_temp_count - view_count;
@@ -1841,6 +1907,7 @@ static void prv_down_click(ClickRecognizerRef r, void *ctx) {
 }
 
 static void prv_up_click(ClickRecognizerRef r, void *ctx) {
+  idle_reset();
   int step = (s_zoom_days == 1) ? 6 : 24;
   int target = s_scroll_target - step;
   if (target < 0) target = 0;
@@ -1861,6 +1928,7 @@ static int              s_loc_menu_indices[MAX_MENU_ROWS]; /* maps row → prese
 
 
 static void prv_loc_menu_select(int index, void *ctx) {
+  idle_reset();
   s_selected_preset = s_loc_menu_indices[index];
   window_stack_pop(true);
   s_status = STATUS_LOADING;
@@ -1920,11 +1988,14 @@ static void prv_loc_menu_window_unload(Window *window) {
 }
 
 static void prv_open_loc_menu(ClickRecognizerRef r, void *ctx) {
+  idle_reset();
   if (s_loc_menu_window) return;  /* already open */
   s_loc_menu_window = window_create();
   window_set_window_handlers(s_loc_menu_window, (WindowHandlers){
-    .load   = prv_loc_menu_window_load,
-    .unload = prv_loc_menu_window_unload,
+    .load      = prv_loc_menu_window_load,
+    .unload    = prv_loc_menu_window_unload,
+    .appear    = prv_idle_appear,
+    .disappear = prv_idle_disappear,
   });
   window_stack_push(s_loc_menu_window, true);
 }
@@ -1987,6 +2058,10 @@ static void prv_window_unload(Window *window) {
 static void prv_init(void) {
   prv_load_settings();
 
+  if (persist_exists(IDLE_EXIT_KEY)) {
+    s_idle_timeout_sec = persist_read_int(IDLE_EXIT_KEY);  /* else keep default 15 */
+  }
+
   /* Apply startup view setting */
   if (s_settings.startup_view == 0) {
     s_zoom_days = 1;
@@ -2007,8 +2082,10 @@ static void prv_init(void) {
   window_set_background_color(s_window, GColorWhite);
   window_set_click_config_provider(s_window, prv_click_config);
   window_set_window_handlers(s_window, (WindowHandlers){
-    .load   = prv_window_load,
-    .unload = prv_window_unload,
+    .load      = prv_window_load,
+    .unload    = prv_window_unload,
+    .appear    = prv_idle_appear,     /* arms the idle timer on launch/re-reveal */
+    .disappear = prv_idle_disappear,
   });
   window_stack_push(s_window, true);
 

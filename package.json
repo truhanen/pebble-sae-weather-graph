@@ -75,7 +75,9 @@
       "PRESET_NAME_5",
       "SELECTED_PRESET",
       "CACHE_MAX_AGE_HOURS",
-      "STARTUP_VIEW"
+      "STARTUP_VIEW",
+      "IDLE_EXIT_SEC",
+      "CFG_OPEN"
     ],
     "resources": {
       "media": [
